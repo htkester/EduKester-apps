@@ -1,0 +1,9 @@
+{
+  "name": "Edukester ToolBox",
+  "description": "A comprehensive suite of AI-powered tools leveraging the Gemini API. This toolbox provides functionalities for image generation and editing, video creation and analysis, real-time voice conversations, grounded search, complex problem-solving with thinking mode, and much more, all within a sleek, modern interface.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}
