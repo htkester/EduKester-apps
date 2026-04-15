@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { Tool } from './types';
 
@@ -16,6 +17,51 @@ export const TOOLS = [
     name: 'Live Conversation',
     description: 'Experience a real-time, low-latency voice conversation with Gemini.',
     icon: <svg xmlns="http://www.w3.org/2000/svg" className={iconClasses} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg>
+  },
+  {
+    id: Tool.SearchDataExplorer,
+    name: 'Search Data Hub',
+    description: 'A powerful web research tool that extracts live data, key statistics, and credible sources from Google Search.',
+    icon: (
+      <svg xmlns="http://www.w3.org/2000/svg" className={iconClasses} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+      </svg>
+    )
+  },
+  // --- Video & Studio (NEW) ---
+  {
+    id: Tool.VideoEditor,
+    name: 'Video Editor Pro',
+    description: 'A professional-grade creative studio to generate, extend (+7s), and semantically edit videos with Veo 3.1.',
+    icon: (
+      <svg xmlns="http://www.w3.org/2000/svg" className={iconClasses} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8l-2 2m0 0l2 2m-2-2h10" />
+      </svg>
+    )
+  },
+  // --- Lifestyle & Fashion ---
+  {
+    id: Tool.FitCheck,
+    name: 'Fit Check AI',
+    description: 'Upload your outfit and get professional style feedback, coordination tips, and an AI fashion rating.',
+    icon: (
+      <svg xmlns="http://www.w3.org/2000/svg" className={iconClasses} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 21a2 2 0 01-2-2m4 0a2 2 0 01-2 2M5 13l4 4L19 7" />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v2m0 0L8.5 7M12 5l3.5 2M4 11a1 1 0 011-1h14a1 1 0 011 1v6a2 2 0 01-2 2H6a2 2 0 01-2-2v-6z" />
+      </svg>
+    )
+  },
+  // --- High Quality Content ---
+  {
+    id: Tool.Wallpaper4K,
+    name: '4K Wallpaper Gen',
+    description: 'Generate ultra-high definition 4K wallpapers using Gemini 3 Pro Image. Requires a billing-enabled API key.',
+    icon: (
+      <svg xmlns="http://www.w3.org/2000/svg" className={iconClasses} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+      </svg>
+    )
   },
   // --- Image ---
   {
@@ -82,7 +128,7 @@ export const TOOLS = [
     id: Tool.VideoGeneration,
     name: 'Video Generation',
     description: 'Produce high-quality videos from text prompts or by animating a starting image with Veo.',
-    icon: <svg xmlns="http://www.w3.org/2000/svg" className={iconClasses} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+    icon: <svg xmlns="http://www.w3.org/2000/svg" className={iconClasses} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
   },
   {
     id: Tool.VideoUnderstanding,
@@ -153,13 +199,13 @@ export const TOOLS = [
     id: Tool.EmailMarketing,
     name: 'Email Marketing',
     description: 'Create, manage, and send bulk email campaigns with AI-powered content generation.',
-    icon: <svg xmlns="http://www.w3.org/2000/svg" className={iconClasses} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path></svg>
+    icon: <svg xmlns="http://www.w3.org/2000/svg" className={iconClasses} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path></svg>
   },
   {
     id: Tool.EmailValidation,
     name: 'Email Validation',
     description: 'Clean and verify email lists by checking for syntax errors, disposable domains, and duplicates.',
-    icon: <svg xmlns="http://www.w3.org/2000/svg" className={iconClasses} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
+    icon: <svg xmlns="http://www.w3.org/2000/svg" className={iconClasses} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
   },
   {
     id: Tool.EmailExtractor,
@@ -187,5 +233,25 @@ export const TOOLS = [
     name: 'Low Latency',
     description: 'Get lightning-fast, "thinking-free" responses for simple questions and tasks.',
     icon: <svg xmlns="http://www.w3.org/2000/svg" className={iconClasses} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+  },
+  {
+    id: Tool.BlogPostGenerator,
+    name: 'Blog Post Generator',
+    description: 'Generate high-quality, long-form blog posts (600-800 words) with customizable tones and styles.',
+    icon: (
+      <svg xmlns="http://www.w3.org/2000/svg" className={iconClasses} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+      </svg>
+    )
+  },
+  {
+    id: Tool.BlogTitleGenerator,
+    name: 'Blog Title Generator',
+    description: 'Generate catchy, SEO-friendly blog titles that drive clicks and improve search rankings.',
+    icon: (
+      <svg xmlns="http://www.w3.org/2000/svg" className={iconClasses} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+      </svg>
+    )
   },
 ];

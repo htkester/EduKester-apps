@@ -1,3106 +1,2086 @@
 
-
-import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { GoogleGenAI, Chat, GenerateContentResponse, LiveSession, Modality, Type, LiveServerMessage, GroundingChunk, VideosOperation, GenerateContentCandidate, WebChunk, VideoGenerationReferenceImage, VideoGenerationReferenceType } from "@google/genai";
-import { Tool, ChatMessage, AspectRatio, VideoAspectRatio, Contact, ContactList, Campaign } from './types';
+import React, { useState, useRef, useEffect } from 'react';
+import { GoogleGenAI, Type, Schema, FunctionDeclaration, HarmCategory, HarmBlockThreshold, LiveServerMessage, Modality } from "@google/genai";
 import { TOOLS } from './constants';
+import { Tool, Contact, VideoResolution } from './types';
+import { fileToBase64, createAudioBlob, decodeAudioData, decode } from './utils/helpers';
 import { disposableDomains, roleBasedEmails } from './data/disposable-domains';
-import { fileToBase64, decode, encode, decodeAudioData, createAudioBlob } from './utils/helpers';
 
-// --- Reusable UI Components ---
+// --- Shared UI Components ---
+const Card: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({ className, ...props }) => (
+  <div className={`bg-gray-800 rounded-xl border border-gray-700 shadow-xl overflow-hidden ${className}`} {...props} />
+);
 
-const Spinner: React.FC<{message?: string}> = ({ message }) => (
-  <div className="flex flex-col justify-center items-center gap-4">
-    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-400"></div>
-    {message && <p className="text-purple-300">{message}</p>}
+const Label: React.FC<React.LabelHTMLAttributes<HTMLLabelElement>> = ({ className, ...props }) => (
+  <label className={`block text-sm font-medium text-gray-300 mb-2 ${className}`} {...props} />
+);
+
+const TextArea: React.FC<React.TextareaHTMLAttributes<HTMLTextAreaElement>> = ({ className, ...props }) => (
+  <textarea className={`w-full bg-gray-900 border border-gray-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition-all resize-y ${className}`} {...props} />
+);
+
+const Input: React.FC<React.InputHTMLAttributes<HTMLInputElement>> = ({ className, ...props }) => (
+  <input className={`w-full bg-gray-900 border border-gray-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition-all ${className}`} {...props} />
+);
+
+const Button: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement>> = ({ className, children, ...props }) => (
+  <button className={`bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white font-bold py-3 px-6 rounded-lg transition-all transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none shadow-lg shadow-purple-900/20 ${className}`} {...props}>
+    {children}
+  </button>
+);
+
+const Spinner: React.FC<{ message?: string }> = ({ message }) => (
+  <div className="flex flex-col items-center justify-center gap-3 p-8">
+    <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-t-2 border-purple-500"></div>
+    {message && <p className="text-gray-400 text-sm animate-pulse font-medium text-center max-w-xs">{message}</p>}
   </div>
 );
 
-interface FileUploaderProps {
-  onFileSelect?: (file: File) => void;
-  onFilesSelect?: (files: FileList) => void;
-  accept: string;
-  label: string;
-  multiple?: boolean;
-}
-
-const FileUploader: React.FC<FileUploaderProps> = ({ onFileSelect, onFilesSelect, accept, label, multiple = false }) => {
-  const [displayText, setDisplayText] = useState<string>(label);
+const FileUploader: React.FC<{ 
+  accept: string; 
+  onFileSelect: (file: File) => void; 
+  label?: string;
+  previewUrl?: string | null;
+  onClear?: () => void;
+  compact?: boolean;
+}> = ({ accept, onFileSelect, label = "Upload File", previewUrl, onClear, compact }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-      // Only reset if the label prop changes and the input is not holding a file value
-      if (fileInputRef.current && !fileInputRef.current.value) {
-          setDisplayText(label);
-      }
-  }, [label]);
-  
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files;
-    if (files && files.length > 0) {
-      if (multiple && onFilesSelect) {
-        onFilesSelect(files);
-        setDisplayText(`${files.length} file(s) selected`);
-      } else if (!multiple && onFileSelect && files[0]) {
-        onFileSelect(files[0]);
-        setDisplayText(files[0].name);
-      }
-    } else {
-        // If user cancels file selection, reset to original label
-        setDisplayText(label);
-    }
-     // Manually clear the input value so the same file can be selected again
-     if (event.target) {
-        event.target.value = '';
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      onFileSelect(e.target.files[0]);
     }
   };
 
   return (
     <div className="w-full">
-      <label className="w-full flex flex-col items-center px-4 py-6 bg-gray-800 rounded-lg shadow-md tracking-wide uppercase border border-dashed border-gray-600 cursor-pointer hover:bg-gray-700 hover:border-purple-400 transition">
-        <svg className="w-8 h-8 text-purple-400" fill="currentColor" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
-          <path d="M16.88 9.1A4 4 0 0 1 16 17H5a5 5 0 0 1-1-9.9V7a3 3 0 0 1 4.52-2.59A4.98 4.98 0 0 1 17 8c0 .38-.04.74-.12 1.1zM11 11h3l-4 4-4-4h3V3h2v8z" />
-        </svg>
-        <span className="mt-2 text-base leading-normal text-center">{displayText}</span>
-        <input ref={fileInputRef} type='file' className="hidden" accept={accept} onChange={handleFileChange} multiple={multiple} />
-      </label>
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileChange}
+        accept={accept}
+        className="hidden"
+      />
+      {previewUrl ? (
+        <div className={`relative group rounded-xl overflow-hidden border border-gray-700 bg-black/50 flex justify-center items-center ${compact ? 'h-24' : 'min-h-[160px] max-h-[300px]'}`}>
+          {accept.includes('video') ? (
+            <video src={previewUrl} className="max-h-full max-w-full object-contain" />
+          ) : accept.includes('audio') ? (
+            <audio src={previewUrl} controls className="w-full p-2 scale-75" />
+          ) : (
+            <img src={previewUrl} alt="Preview" className="max-h-full max-w-full object-contain" />
+          )}
+          {onClear && (
+            <button 
+              onClick={(e) => { e.stopPropagation(); onClear(); if(fileInputRef.current) fileInputRef.current.value = ''; }}
+              className="absolute top-1 right-1 bg-red-600/80 hover:bg-red-600 text-white p-1 rounded-full backdrop-blur-sm transition-colors z-10"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
+            </button>
+          )}
+        </div>
+      ) : (
+        <div 
+          onClick={() => fileInputRef.current?.click()}
+          className={`border-2 border-dashed border-gray-700 hover:border-purple-500 hover:bg-gray-800/50 rounded-xl cursor-pointer transition-all flex flex-col items-center justify-center text-gray-400 group ${compact ? 'p-2 h-24' : 'p-6'}`}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className={`${compact ? 'h-6 w-6' : 'h-10 w-10'} mb-2 text-gray-500 group-hover:text-purple-400 transition-colors`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
+          <span className={`${compact ? 'text-[10px]' : 'text-xs'} font-medium`}>{label}</span>
+        </div>
+      )}
     </div>
   );
 };
 
-// --- Zoomable Image Component ---
-const ZoomableImage: React.FC<{ src: string; alt: string }> = ({ src, alt }) => {
-    const [zoom, setZoom] = useState(1);
-    const [position, setPosition] = useState({ x: 0, y: 0 });
-    const [isDragging, setIsDragging] = useState(false);
-    const [startDrag, setStartDrag] = useState({ x: 0, y: 0 });
-    const containerRef = useRef<HTMLDivElement>(null);
+// --- Specialized Tools ---
 
-    const handleWheel = (e: React.WheelEvent) => {
-        e.preventDefault();
-        const container = containerRef.current;
-        if (!container) return;
+// Optimized Video Editor Pro Tool
+const VideoEditorTool: React.FC = () => {
+    const [prompt, setPrompt] = useState('');
+    const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16'>('16:9');
+    const [resolution, setResolution] = useState<VideoResolution>('720p');
+    const [firstFrameFile, setFirstFrameFile] = useState<File | null>(null);
+    const [lastFrameFile, setLastFrameFile] = useState<File | null>(null);
+    const [uploadVideoFile, setUploadVideoFile] = useState<File | null>(null);
+    const [previewUrls, setPreviewUrls] = useState<{first?: string, last?: string, upload?: string}>({});
+    
+    const [loading, setLoading] = useState(false);
+    const [statusMessage, setStatusMessage] = useState('');
+    const [analysisResult, setAnalysisResult] = useState<string | null>(null);
+    
+    // Result States
+    const [lastOperation, setLastOperation] = useState<any>(null);
+    const [videoBlobUrl, setVideoBlobUrl] = useState<string | null>(null);
+    const [history, setHistory] = useState<{url: string, type: string, prompt: string}[]>([]);
 
-        const rect = container.getBoundingClientRect();
-        const x = e.clientX - rect.left; // Mouse position relative to container
-        const y = e.clientY - rect.top;
-
-        const zoomFactor = 1.1;
-        const newZoom = e.deltaY < 0 ? zoom * zoomFactor : zoom / zoomFactor;
-        const clampedZoom = Math.max(0.5, Math.min(newZoom, 5));
-
-        const newX = x - (x - position.x) * (clampedZoom / zoom);
-        const newY = y - (y - position.y) * (clampedZoom / zoom);
-
-        setZoom(clampedZoom);
-        setPosition({ x: newX, y: newY });
+    const checkKeyGuard = async () => {
+        if (window.aistudio?.hasSelectedApiKey) {
+            const hasKey = await window.aistudio.hasSelectedApiKey();
+            if (!hasKey && window.aistudio.openSelectKey) {
+                await window.aistudio.openSelectKey();
+            }
+        }
     };
 
-    const handleMouseDown = (e: React.MouseEvent) => {
-        e.preventDefault();
-        setIsDragging(true);
-        setStartDrag({ x: e.clientX - position.x, y: e.clientY - position.y });
+    const processOperation = async (opPromise: Promise<any>) => {
+        setLoading(true);
+        setAnalysisResult(null);
+        setStatusMessage('Initializing Veo 3.1 Creative Engine...');
+        try {
+            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+            let operation = await opPromise;
+            
+            while (!operation.done) {
+                setStatusMessage('Rendering high-fidelity frames. This process consumes significant AI compute...');
+                await new Promise(r => setTimeout(r, 10000));
+                operation = await ai.operations.getVideosOperation({ operation });
+            }
+
+            const videoResult = operation.response?.generatedVideos?.[0]?.video;
+            if (videoResult?.uri) {
+                setStatusMessage('Assembling video stream...');
+                const response = await fetch(`${videoResult.uri}&key=${process.env.API_KEY}`);
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                
+                setVideoBlobUrl(url);
+                setLastOperation(operation);
+                setHistory(prev => [{ url, type: lastOperation ? 'Iteration' : 'Base', prompt }, ...prev]);
+            }
+        } catch (e) {
+            console.error(e);
+            alert("Workflow failed. Please ensure your project has billing enabled for Veo models.");
+        } finally {
+            setLoading(false);
+            setStatusMessage('');
+        }
     };
 
-    const handleMouseMove = (e: React.MouseEvent) => {
-        if (!isDragging) return;
-        e.preventDefault();
-        setPosition({
-            x: e.clientX - startDrag.x,
-            y: e.clientY - startDrag.y,
+    const handleGenerate = async () => {
+        await checkKeyGuard();
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+        
+        let config: any = {
+            numberOfVideos: 1,
+            resolution: resolution,
+            aspectRatio: aspectRatio
+        };
+
+        if (lastFrameFile) {
+            config.lastFrame = {
+                imageBytes: await fileToBase64(lastFrameFile),
+                mimeType: lastFrameFile.type
+            };
+        }
+
+        let opParams: any = {
+            model: 'veo-3.1-fast-generate-preview',
+            prompt,
+            config
+        };
+
+        if (firstFrameFile) {
+            const base64 = await fileToBase64(firstFrameFile);
+            opParams.image = { imageBytes: base64, mimeType: firstFrameFile.type };
+        }
+
+        processOperation(ai.models.generateVideos(opParams));
+    };
+
+    const handleExtend = async () => {
+        if (!lastOperation) return;
+        await checkKeyGuard();
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+        
+        const previousVideo = lastOperation.response?.generatedVideos?.[0]?.video;
+        
+        const opPromise = ai.models.generateVideos({
+            model: 'veo-3.1-generate-preview',
+            prompt: prompt || 'Continue the cinematography with perfect continuity.',
+            video: previousVideo,
+            config: {
+                numberOfVideos: 1,
+                resolution: '720p',
+                aspectRatio: aspectRatio
+            }
         });
+
+        processOperation(opPromise);
     };
 
-    const handleMouseUpOrLeave = () => {
-        setIsDragging(false);
-    };
-
-    const handleZoomIn = () => {
-        setZoom(prev => Math.min(prev * 1.2, 5));
-    };
-
-    const handleZoomOut = () => {
-        setZoom(prev => Math.max(prev / 1.2, 0.5));
-    };
-
-    const handleReset = () => {
-        setZoom(1);
-        setPosition({ x: 0, y: 0 });
+    const handleAnalyzeUpload = async (type: 'describe' | 'transcribe') => {
+        if (!uploadVideoFile) return;
+        setLoading(true);
+        setStatusMessage(`AI is ${type === 'transcribe' ? 'transcribing' : 'analyzing'} your uploaded footage...`);
+        try {
+            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+            const base64 = await fileToBase64(uploadVideoFile);
+            const promptStr = type === 'transcribe' 
+                ? "Provide a word-for-word transcription of all spoken dialogue in this video. Identify speakers if possible." 
+                : "Analyze this video and provide a professional breakdown of the scene, lighting, action, and subject matter.";
+            
+            const response = await ai.models.generateContent({
+                model: 'gemini-3-flash-preview',
+                contents: {
+                    parts: [
+                        { inlineData: { data: base64, mimeType: uploadVideoFile.type } },
+                        { text: promptStr }
+                    ]
+                }
+            });
+            setAnalysisResult(response.text || 'No insights generated.');
+        } catch (e) {
+            console.error(e);
+            alert("Analysis failed. Max upload size is typically 10-20MB for this preview.");
+        } finally {
+            setLoading(false);
+            setStatusMessage('');
+        }
     };
 
     return (
-        <div className="relative w-full h-full group">
-            <div
-                ref={containerRef}
-                className="w-full h-full rounded-lg overflow-hidden"
-                onWheel={handleWheel}
-                onMouseDown={handleMouseDown}
-                onMouseMove={handleMouseMove}
-                onMouseUp={handleMouseUpOrLeave}
-                onMouseLeave={handleMouseUpOrLeave}
-                style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
-            >
-                <img
-                    src={src}
-                    alt={alt}
-                    className="w-full h-full object-contain"
-                    style={{ transform: `translate(${position.x}px, ${position.y}px) scale(${zoom})`, transformOrigin: '0 0', willChange: 'transform' }}
-                />
-            </div>
-            <div className="absolute bottom-2 right-2 flex items-center gap-1 bg-gray-800/70 p-1 rounded-md opacity-0 group-hover:opacity-100 transition-opacity">
-                <button onClick={handleZoomOut} className="p-1.5 hover:bg-gray-700 rounded-md" title="Zoom Out">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM13 10H7" /></svg>
-                </button>
-                <button onClick={handleZoomIn} className="p-1.5 hover:bg-gray-700 rounded-md" title="Zoom In">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7" /></svg>
-                </button>
-                <button onClick={handleReset} className="p-1.5 hover:bg-gray-700 rounded-md" title="Reset View">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 110 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clipRule="evenodd" /></svg>
-                </button>
+        <div className="max-w-7xl mx-auto space-y-6">
+            <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+                
+                {/* Editor Panel */}
+                <Card className="lg:col-span-1 p-5 space-y-5 bg-gray-900/90 border-purple-500/30 shadow-2xl">
+                    <div className="space-y-4">
+                        <div className="flex justify-between items-center">
+                            <Label className="text-purple-400 font-bold tracking-widest uppercase text-[10px]">Studio Settings</Label>
+                            <span className="text-[10px] bg-purple-600/20 text-purple-400 px-2 py-0.5 rounded font-mono">VE-3.1 PRO</span>
+                        </div>
+                        
+                        <div className="grid grid-cols-2 gap-2">
+                            <div>
+                                <Label className="text-[10px] text-gray-500">Ratio</Label>
+                                <select 
+                                    value={aspectRatio} 
+                                    onChange={e => setAspectRatio(e.target.value as any)}
+                                    className="w-full bg-black border border-gray-700 rounded p-2 text-xs text-white"
+                                >
+                                    <option value="16:9">Landscape</option>
+                                    <option value="9:16">Portrait</option>
+                                </select>
+                            </div>
+                            <div>
+                                <Label className="text-[10px] text-gray-500">Quality</Label>
+                                <select 
+                                    value={resolution} 
+                                    onChange={e => setResolution(e.target.value as any)}
+                                    className="w-full bg-black border border-gray-700 rounded p-2 text-xs text-white"
+                                >
+                                    <option value="720p">720p HD</option>
+                                    <option value="1080p">1080p FHD</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        {!lastOperation && (
+                            <div className="grid grid-cols-2 gap-2">
+                                <div>
+                                    <Label className="text-[10px] text-gray-400">First Frame</Label>
+                                    <FileUploader 
+                                        compact
+                                        accept="image/*" 
+                                        onFileSelect={(f) => { setFirstFrameFile(f); setPreviewUrls(p => ({...p, first: URL.createObjectURL(f)})); }} 
+                                        previewUrl={previewUrls.first}
+                                        onClear={() => { setFirstFrameFile(null); setPreviewUrls(p => ({...p, first: undefined})); }}
+                                        label="Start"
+                                    />
+                                </div>
+                                <div>
+                                    <Label className="text-[10px] text-gray-400">Last Frame</Label>
+                                    <FileUploader 
+                                        compact
+                                        accept="image/*" 
+                                        onFileSelect={(f) => { setLastFrameFile(f); setPreviewUrls(p => ({...p, last: URL.createObjectURL(f)})); }} 
+                                        previewUrl={previewUrls.last}
+                                        onClear={() => { setLastFrameFile(null); setPreviewUrls(p => ({...p, last: undefined})); }}
+                                        label="End"
+                                    />
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="pt-2 border-t border-gray-800">
+                            <Label className="text-[10px] text-gray-400 uppercase">Input Footage</Label>
+                            <FileUploader 
+                                compact
+                                accept="video/*" 
+                                onFileSelect={(f) => { setUploadVideoFile(f); setPreviewUrls(p => ({...p, upload: URL.createObjectURL(f)})); }} 
+                                previewUrl={previewUrls.upload}
+                                onClear={() => { setUploadVideoFile(null); setPreviewUrls(p => ({...p, upload: undefined})); setAnalysisResult(null); }}
+                                label="Analysis Upload"
+                            />
+                            {uploadVideoFile && (
+                                <div className="flex gap-1 mt-2">
+                                    <button onClick={() => handleAnalyzeUpload('describe')} className="flex-1 text-[9px] bg-gray-800 hover:bg-gray-700 p-1.5 rounded text-gray-300">Inspect</button>
+                                    <button onClick={() => handleAnalyzeUpload('transcribe')} className="flex-1 text-[9px] bg-gray-800 hover:bg-gray-700 p-1.5 rounded text-gray-300">Transcribe</button>
+                                </div>
+                            )}
+                        </div>
+
+                        <div>
+                            <Label className="text-[10px] text-gray-400">{lastOperation ? 'Edit Command' : 'Director Prompt'}</Label>
+                            <TextArea 
+                                value={prompt} 
+                                onChange={e => setPrompt(e.target.value)} 
+                                placeholder={lastOperation ? "Transform scene..." : "Cinematic description..."}
+                                className="min-h-[80px] text-xs bg-black/60"
+                            />
+                        </div>
+                    </div>
+
+                    <div className="space-y-2 pt-2">
+                        {!lastOperation ? (
+                            <Button onClick={handleGenerate} disabled={loading || !prompt} className="w-full text-xs py-3">
+                                Bake Production
+                            </Button>
+                        ) : (
+                            <>
+                                <Button onClick={handleExtend} disabled={loading} className="w-full text-xs bg-emerald-600 hover:bg-emerald-500">
+                                    Extend +7 Seconds
+                                </Button>
+                                <Button onClick={handleExtend} disabled={loading || !prompt} className="w-full text-xs bg-blue-600 hover:bg-blue-500">
+                                    Transform Current
+                                </Button>
+                                <button 
+                                    onClick={() => { setLastOperation(null); setVideoBlobUrl(null); setPrompt(''); }}
+                                    className="w-full py-2 text-[10px] text-gray-500 hover:text-red-400 transition-colors uppercase tracking-widest font-bold"
+                                >
+                                    Reset Studio
+                                </button>
+                            </>
+                        )}
+                    </div>
+                </Card>
+
+                {/* Main Production Workspace */}
+                <div className="lg:col-span-3 space-y-6">
+                    {loading && (
+                        <Card className="p-16 flex flex-col items-center justify-center space-y-6 bg-black/40 border-purple-500/20 border-2 shadow-inner">
+                            <Spinner message={statusMessage} />
+                        </Card>
+                    )}
+
+                    {!loading && analysisResult && (
+                        <Card className="p-6 bg-purple-900/10 border-purple-500/20 animate-fade-in">
+                            <Label className="text-purple-400 font-bold mb-4 flex items-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>
+                                AI Footage Insights
+                            </Label>
+                            <div className="prose prose-invert max-w-none text-sm text-gray-300 whitespace-pre-wrap font-sans leading-relaxed italic">
+                                {analysisResult}
+                            </div>
+                        </Card>
+                    )}
+
+                    {!loading && videoBlobUrl && (
+                        <Card className="overflow-hidden bg-black shadow-[0_0_80px_rgba(0,0,0,1)] border-4 border-gray-800 rounded-2xl relative">
+                            <div className="absolute top-4 right-4 z-20 flex gap-2">
+                                <a href={videoBlobUrl} download="production.mp4" className="bg-white/10 hover:bg-white/20 text-white text-[10px] px-3 py-1.5 rounded-full backdrop-blur-md transition-all font-bold uppercase">Save MP4</a>
+                            </div>
+                            <video 
+                                key={videoBlobUrl} 
+                                src={videoBlobUrl} 
+                                controls 
+                                className={`w-full max-h-[70vh] object-contain shadow-2xl shadow-purple-500/5 ${aspectRatio === '9:16' ? 'aspect-[9/16]' : 'aspect-video'}`} 
+                                autoPlay 
+                                loop
+                            />
+                        </Card>
+                    )}
+
+                    {!loading && !videoBlobUrl && !analysisResult && (
+                        <div className="h-full min-h-[500px] border-2 border-dashed border-gray-800 rounded-3xl flex flex-col items-center justify-center text-gray-600 p-20 text-center bg-gray-900/20">
+                            <div className="w-24 h-24 bg-gray-800/50 rounded-full flex items-center justify-center mb-6">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-gray-600 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                            </div>
+                            <h3 className="text-xl font-semibold text-gray-400 mb-2 tracking-tight">Studio Idle</h3>
+                            <p className="text-sm max-w-md text-gray-600 font-sans">Start a new project by defining a scene prompt or uploading existing footage for AI-enhanced transcription and analysis.</p>
+                        </div>
+                    )}
+
+                    {/* Timeline History */}
+                    {history.length > 0 && (
+                        <div className="space-y-4 pt-4">
+                            <div className="flex items-center gap-2">
+                                <div className="h-px bg-gray-800 flex-1"></div>
+                                <Label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest px-4">Production Stack</Label>
+                                <div className="h-px bg-gray-800 flex-1"></div>
+                            </div>
+                            <div className="flex gap-4 overflow-x-auto pb-6 scrollbar-thin scrollbar-thumb-purple-900/40">
+                                {history.map((item, idx) => (
+                                    <div 
+                                        key={idx} 
+                                        onClick={() => setVideoBlobUrl(item.url)}
+                                        className="flex-shrink-0 w-48 cursor-pointer group animate-fade-in"
+                                    >
+                                        <div className="aspect-video bg-black rounded-xl overflow-hidden border border-gray-700 group-hover:border-purple-500/50 transition-all shadow-lg ring-offset-2 ring-offset-black group-hover:ring-2 ring-purple-500/20">
+                                            <video src={item.url} className="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition-opacity" />
+                                        </div>
+                                        <div className="mt-2 space-y-1">
+                                            <p className="text-[9px] font-bold text-purple-400 uppercase">{item.type} {history.length - idx}</p>
+                                            <p className="text-[10px] text-gray-500 truncate italic font-sans">"{item.prompt}"</p>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
             </div>
         </div>
     );
 };
 
-// --- Main Feature Components ---
+// Fit Check AI Tool
+const FitCheckTool: React.FC = () => {
+    const [file, setFile] = useState<File | null>(null);
+    const [preview, setPreview] = useState<string | null>(null);
+    const [occasion, setOccasion] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [feedback, setFeedback] = useState<string | null>(null);
 
-// --- Chatbot Component ---
-const Chatbot: React.FC = () => {
-  const [history, setHistory] = useState<ChatMessage[]>([]);
-  const [chat, setChat] = useState<Chat | null>(null);
+    const performFitCheck = async () => {
+        if (!file) return;
+        setLoading(true);
+        setFeedback(null);
+
+        try {
+            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+            const base64 = await fileToBase64(file);
+            
+            const prompt = `Analyze this outfit. You are a high-end fashion consultant. Provide a "Fit Check" report. 
+            Context: ${occasion ? `User is dressing for: ${occasion}` : 'No specific occasion provided.'}
+            Format your response clearly:
+            1. Style Summary (What's the vibe?)
+            2. AI Rating (Out of 10)
+            3. Coordination Feedback (Colors, fit, proportions)
+            4. Suggested Improvements (Accessories, shoes, or layering)
+            Be encouraging but honest and stylish.`;
+
+            const response = await ai.models.generateContent({
+                model: 'gemini-3-flash-preview',
+                contents: {
+                    parts: [
+                        { inlineData: { data: base64, mimeType: file.type } },
+                        { text: prompt }
+                    ]
+                }
+            });
+
+            setFeedback(response.text || "I'm speechless! (But really, something went wrong with the analysis).");
+        } catch (e) {
+            console.error(e);
+            alert("Fashion emergency! Failed to analyze the fit.");
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div className="max-w-4xl mx-auto space-y-6">
+            <Card className="p-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    <div className="space-y-4">
+                        <Label>Your Outfit Photo</Label>
+                        <FileUploader 
+                            accept="image/*" 
+                            onFileSelect={(f) => { setFile(f); setPreview(URL.createObjectURL(f)); }} 
+                            previewUrl={preview}
+                            onClear={() => { setFile(null); setPreview(null); setFeedback(null); }}
+                            label="Upload a full-body mirror selfie"
+                        />
+                    </div>
+                    <div className="flex flex-col justify-between">
+                        <div>
+                            <Label>Occasion (Optional)</Label>
+                            <Input 
+                                value={occasion} 
+                                onChange={e => setOccasion(e.target.value)} 
+                                placeholder="e.g. Summer Wedding, Job Interview, First Date"
+                            />
+                            <p className="text-xs text-gray-500 mt-2">Providing context helps the AI give better advice.</p>
+                        </div>
+                        <Button 
+                            onClick={performFitCheck} 
+                            disabled={loading || !file} 
+                            className="w-full mt-8"
+                        >
+                            {loading ? 'Analyzing Your Swag...' : 'Check My Fit'}
+                        </Button>
+                    </div>
+                </div>
+            </Card>
+
+            {loading && <Spinner message="Consulting the fashion oracle..." />}
+
+            {feedback && (
+                <Card className="p-8 bg-gray-900/40 border-purple-500/20 animate-fade-in">
+                    <div className="flex items-center gap-3 mb-6">
+                        <div className="p-2 bg-purple-500/20 rounded-lg">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                            </svg>
+                        </div>
+                        <h3 className="text-xl font-bold text-white">Fit Check Report</h3>
+                    </div>
+                    <div className="prose prose-invert max-w-none">
+                        <div className="whitespace-pre-wrap text-gray-300 leading-relaxed font-sans text-lg">
+                            {feedback}
+                        </div>
+                    </div>
+                </Card>
+            )}
+        </div>
+    );
+};
+
+// 4K Wallpaper Generator Tool
+const Wallpaper4KTool: React.FC = () => {
+    const [prompt, setPrompt] = useState('');
+    const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16' | '1:1'>('16:9');
+    const [useGrounding, setUseGrounding] = useState(false);
+    const [loading, setLoading] = useState(false);
+    const [resultImg, setResultImg] = useState<string | null>(null);
+    const [hasKey, setHasKey] = useState<boolean | null>(null);
+
+    useEffect(() => {
+        const checkKey = async () => {
+            if (window.aistudio?.hasSelectedApiKey) {
+                const selected = await window.aistudio.hasSelectedApiKey();
+                setHasKey(selected);
+            }
+        };
+        checkKey();
+    }, []);
+
+    const handleOpenKeyDialog = async () => {
+        if (window.aistudio?.openSelectKey) {
+            await window.aistudio.openSelectKey();
+            setHasKey(true);
+        }
+    };
+
+    const generateWallpaper = async () => {
+        if (!prompt) return;
+        setLoading(true);
+        setResultImg(null);
+
+        try {
+            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+            const response = await ai.models.generateContent({
+                model: 'gemini-3-pro-image-preview',
+                contents: { parts: [{ text: `${prompt}. High detail, cinematic, professional 4K ultra HD resolution.` }] },
+                config: {
+                    imageConfig: {
+                        aspectRatio: aspectRatio as any,
+                        imageSize: "4K"
+                    },
+                    tools: useGrounding ? [{ googleSearch: {} }] : undefined
+                }
+            });
+
+            const parts = response.candidates?.[0]?.content?.parts;
+            if (parts) {
+                for (const part of parts) {
+                    if (part.inlineData) {
+                        setResultImg(`data:image/png;base64,${part.inlineData.data}`);
+                        break;
+                    }
+                }
+            }
+        } catch (e) {
+            const err = (e as any).message || "";
+            if (err.includes("Requested entity was not found")) {
+                setHasKey(false);
+                alert("Please select a valid paid API key for 4K generation.");
+            } else {
+                console.error(e);
+                alert("Generation failed. High-res tasks require specific project access.");
+            }
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    if (hasKey === false) {
+        return (
+            <Card className="p-8 text-center max-w-xl mx-auto space-y-6 animate-fade-in">
+                <div className="w-20 h-20 bg-yellow-500/10 rounded-full flex items-center justify-center mx-auto">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-yellow-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                    </svg>
+                </div>
+                <h3 className="text-xl font-bold">API Key Selection Required</h3>
+                <p className="text-gray-400">
+                    To generate 4K high-resolution wallpapers using Gemini 3 Pro Image, you must select a billing-enabled API key from a paid Google Cloud project.
+                </p>
+                <div className="flex flex-col gap-3">
+                    <Button onClick={handleOpenKeyDialog} className="w-full">Select Project API Key</Button>
+                    <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="text-sm text-purple-400 hover:underline">Learn about Gemini API billing</a>
+                </div>
+            </Card>
+        );
+    }
+
+    return (
+        <div className="max-w-4xl mx-auto space-y-6">
+            <Card className="p-6 space-y-6">
+                <div className="flex items-center justify-between">
+                    <Label className="text-lg font-bold flex items-center gap-2">
+                        Wallpaper Description
+                        <span className="bg-purple-600 text-[10px] px-2 py-0.5 rounded-full uppercase tracking-widest">4K Ultra HD</span>
+                    </Label>
+                    <div className="flex items-center gap-2 text-xs text-gray-400">
+                        <input 
+                            type="checkbox" 
+                            id="grounding" 
+                            checked={useGrounding} 
+                            onChange={e => setUseGrounding(e.target.checked)}
+                            className="w-4 h-4 accent-purple-600"
+                        />
+                        <label htmlFor="grounding">Use Search Grounding for Detail</label>
+                    </div>
+                </div>
+
+                <TextArea 
+                    value={prompt} 
+                    onChange={e => setPrompt(e.target.value)} 
+                    placeholder="e.g. A lush floating forest in the clouds, Bioluminescent plants, Ghibli style, evening light..."
+                    className="min-h-[120px]"
+                />
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <Label>Target Display</Label>
+                        <div className="flex gap-2">
+                            {(['16:9', '9:16', '1:1'] as const).map(ratio => (
+                                <button
+                                    key={ratio}
+                                    onClick={() => setAspectRatio(ratio)}
+                                    className={`flex-1 py-2 rounded-lg border text-sm font-medium transition-all ${aspectRatio === ratio ? 'bg-purple-600 border-purple-500 text-white' : 'bg-gray-900 border-gray-700 text-gray-400 hover:border-gray-500'}`}
+                                >
+                                    {ratio === '16:9' ? 'Desktop' : ratio === '9:16' ? 'Mobile' : 'Square'}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+
+                <Button onClick={generateWallpaper} disabled={loading || !prompt} className="w-full">
+                    {loading ? 'Rendering 4K Canvas...' : 'Generate 4K Wallpaper'}
+                </Button>
+            </Card>
+
+            {loading && <Spinner message="Gemini 3 Pro is meticulously rendering millions of pixels..." />}
+
+            {resultImg && (
+                <Card className="p-6 animate-fade-in group">
+                    <div className="relative rounded-xl overflow-hidden shadow-2xl border border-gray-700">
+                        <img src={resultImg} alt="Generated 4K" className="w-full h-auto" />
+                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-[2px]">
+                             <a 
+                                href={resultImg} 
+                                download="4k-wallpaper.png" 
+                                className="bg-white text-black px-10 py-3 rounded-full font-bold shadow-2xl hover:scale-105 transition-transform"
+                             >
+                                 Download 4K PNG
+                             </a>
+                        </div>
+                    </div>
+                    <p className="mt-4 text-xs text-center text-gray-500 italic">"Resolution: 3840 x 2160 (Approx) • AI Rendered"</p>
+                </Card>
+            )}
+        </div>
+    );
+};
+
+// Search Data Hub Tool
+const SearchDataExplorerTool: React.FC = () => {
+    const [query, setQuery] = useState('');
+    const [researchMode, setResearchMode] = useState('general');
+    const [resultText, setResultText] = useState('');
+    const [sources, setSources] = useState<{title: string, uri: string}[]>([]);
+    const [loading, setLoading] = useState(false);
+    const [insights, setInsights] = useState<string[]>([]);
+
+    const handleDataSearch = async () => {
+        if (!query.trim()) return;
+        setLoading(true);
+        setResultText('');
+        setSources([]);
+        setInsights([]);
+
+        try {
+            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+            
+            const modePrompts: Record<string, string> = {
+                general: "Research this topic and provide a comprehensive summary of facts.",
+                market: "Analyze the current market trends, major players, and recent statistics for this topic.",
+                competitive: "Perform a competitive analysis. Identify key competitors and their core offerings or recent news.",
+                technical: "Extract deep technical details, specifications, or documentation-based facts about this topic."
+            };
+
+            const prompt = `Research Data Task: "${query}"
+Mode: ${researchMode.toUpperCase()}
+Instruction: ${modePrompts[researchMode]} 
+Format: Provide a structured summary followed by a list of key data points (metrics, dates, entities).`;
+
+            const response = await ai.models.generateContent({
+                model: 'gemini-3-flash-preview',
+                contents: prompt,
+                config: {
+                    tools: [{ googleSearch: {} }]
+                }
+            });
+
+            setResultText(response.text || 'No data found.');
+            
+            const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
+            if (chunks) {
+                const extractedSources = chunks
+                    .map((c: any) => c.web)
+                    .filter((w: any) => w && w.uri)
+                    .map((w: any) => ({ title: w.title || 'Untitled Source', uri: w.uri }));
+                
+                const uniqueSources = Array.from(new Set(extractedSources.map(s => s.uri)))
+                    .map(uri => extractedSources.find(s => s.uri === uri)!);
+                    
+                setSources(uniqueSources);
+            }
+
+            const lines = (response.text || '').split('\n');
+            const dataPoints = lines.filter(l => l.trim().startsWith('*') || l.trim().startsWith('-') || /\d+/.test(l)).slice(0, 8);
+            setInsights(dataPoints);
+
+        } catch (e) {
+            console.error(e);
+            setResultText("An error occurred while gathering research data.");
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div className="max-w-6xl mx-auto space-y-6">
+            <Card className="p-6">
+                <div className="flex flex-col md:flex-row gap-4">
+                    <div className="flex-1">
+                        <Label>Search Query or Research Topic</Label>
+                        <Input 
+                            value={query} 
+                            onChange={e => setQuery(e.target.value)} 
+                            placeholder="e.g. Current semiconductor market cap trends 2025" 
+                            onKeyDown={e => e.key === 'Enter' && handleDataSearch()}
+                        />
+                    </div>
+                    <div className="md:w-64">
+                        <Label>Research Mode</Label>
+                        <select 
+                            value={researchMode} 
+                            onChange={e => setResearchMode(e.target.value)}
+                            className="w-full bg-gray-900 border border-gray-700 rounded-lg p-3 text-white outline-none focus:border-purple-500"
+                        >
+                            <option value="general">General Research</option>
+                            <option value="market">Market Analysis</option>
+                            <option value="competitive">Competitive Landscape</option>
+                            <option value="technical">Technical Specs</option>
+                        </select>
+                    </div>
+                </div>
+                <Button 
+                    onClick={handleDataSearch} 
+                    disabled={loading || !query.trim()} 
+                    className="w-full mt-6 flex items-center justify-center gap-2"
+                >
+                    {loading ? (
+                        <>
+                            <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                            Gathering Data...
+                        </>
+                    ) : (
+                        <>
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                <path fillRule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clipRule="evenodd" />
+                            </svg>
+                            Explore Data
+                        </>
+                    )}
+                </Button>
+            </Card>
+
+            {loading && <Spinner message="Querying live search engines and verifying data points..." />}
+
+            {resultText && (
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fade-in">
+                    <Card className="lg:col-span-2 p-6 h-fit">
+                        <Label className="text-purple-400 font-bold mb-4 block border-b border-gray-700 pb-2">Research Report</Label>
+                        <div className="prose prose-invert max-w-none prose-p:text-gray-300 prose-li:text-gray-300">
+                            <div className="whitespace-pre-wrap leading-relaxed">{resultText}</div>
+                        </div>
+                    </Card>
+
+                    <div className="space-y-6">
+                        {sources.length > 0 && (
+                            <Card className="p-5">
+                                <Label className="flex items-center gap-2 text-blue-400 font-bold mb-4">
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                        <path d="M11 3a1 1 0 100 2h2.586l-6.293 6.293a1 1 0 101.414 1.414L15 6.414V9a1 1 0 102 0V4a1 1 0 00-1-1h-5z" />
+                                        <path d="M5 5a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-3a1 1 0 10-2 0v3H5V7h3a1 1 0 000-2H5z" />
+                                    </svg>
+                                    Live Sources ({sources.length})
+                                </Label>
+                                <div className="space-y-3">
+                                    {sources.map((src, i) => (
+                                        <a 
+                                            key={i} 
+                                            href={src.uri} 
+                                            target="_blank" 
+                                            rel="noreferrer" 
+                                            className="block p-3 bg-gray-900/50 hover:bg-gray-700 border border-gray-700 rounded-lg transition-colors group"
+                                        >
+                                            <div className="text-sm font-semibold text-gray-200 group-hover:text-white truncate mb-1">{src.title}</div>
+                                            <div className="text-xs text-gray-500 truncate group-hover:text-gray-400">{src.uri}</div>
+                                        </a>
+                                    ))}
+                                </div>
+                            </Card>
+                        )}
+
+                        {insights.length > 0 && (researchMode !== 'general') && (
+                            <Card className="p-5 bg-purple-900/5 border-purple-500/20">
+                                <Label className="text-purple-400 font-bold mb-4">Extracted Insights</Label>
+                                <div className="space-y-2">
+                                    {insights.map((insight, i) => (
+                                        <div key={i} className="text-xs p-2 bg-gray-900 rounded border border-gray-800 text-gray-400 italic">
+                                            {insight}
+                                        </div>
+                                    ))}
+                                </div>
+                            </Card>
+                        )}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// 1. Chatbot Tool
+const ChatInterface: React.FC = () => {
+  const [messages, setMessages] = useState<{role: 'user' | 'model', text: string}[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const chatRef = useRef<any>(null);
 
   useEffect(() => {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-    const chatInstance = ai.chats.create({ model: 'gemini-2.5-flash' });
-    setChat(chatInstance);
-  }, []);
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
-  useEffect(() => {
-    if (chatContainerRef.current) {
-      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
-    }
-  }, [history]);
-
-  const handleSend = async () => {
-    if (!input.trim() || !chat || loading) return;
-    setLoading(true);
-    const userMessage: ChatMessage = { role: 'user', parts: [{ text: input }] };
-    setHistory(prev => [...prev, userMessage]);
+  const sendMessage = async () => {
+    if (!input.trim()) return;
+    const userMsg = input;
     setInput('');
+    setMessages(prev => [...prev, { role: 'user', text: userMsg }]);
+    setLoading(true);
 
     try {
-      let fullResponseText = "";
-      const result = await chat.sendMessageStream({ message: input });
-      let firstChunk = true;
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+      if (!chatRef.current) {
+        chatRef.current = ai.chats.create({ model: 'gemini-3-flash-preview' });
+      }
+
+      const result = await chatRef.current.sendMessageStream({ message: userMsg });
+      let fullText = '';
+      setMessages(prev => [...prev, { role: 'model', text: '' }]);
+      
       for await (const chunk of result) {
-          const chunkText = chunk.text;
-          fullResponseText += chunkText;
-          if(firstChunk){
-            setHistory(prev => [...prev, { role: 'model', parts: [{ text: fullResponseText }] }]);
-            firstChunk = false;
-          } else {
-            setHistory(prev => {
-              const newHistory = [...prev];
-              newHistory[newHistory.length-1] = { role: 'model', parts: [{ text: fullResponseText }]};
-              return newHistory;
-            });
-          }
+        const text = chunk.text;
+        fullText += text;
+        setMessages(prev => {
+          const newMsgs = [...prev];
+          newMsgs[newMsgs.length - 1].text = fullText;
+          return newMsgs;
+        });
       }
     } catch (error) {
       console.error(error);
-      setHistory(prev => [...prev, { role: 'model', parts: [{ text: 'Sorry, something went wrong.' }] }]);
+      setMessages(prev => [...prev, { role: 'model', text: "Sorry, I encountered an error." }]);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="h-full flex flex-col bg-gray-800/50 rounded-lg p-4">
-      <div ref={chatContainerRef} className="flex-1 overflow-y-auto pr-2 space-y-4">
-        {history.map((msg, index) => (
-          <div key={index} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-lg p-3 rounded-xl ${msg.role === 'user' ? 'bg-purple-600 text-white' : 'bg-gray-700'}`}>
-              <p className="text-sm whitespace-pre-wrap">{msg.parts[0].text}</p>
+    <div className="flex flex-col h-[calc(100vh-140px)] max-w-4xl mx-auto">
+      <div className="flex-1 overflow-y-auto space-y-4 p-4 scrollbar-thin scrollbar-thumb-gray-800">
+        {messages.length === 0 && (
+          <div className="text-center text-gray-500 mt-20">
+            <p className="text-lg">Start a conversation with Gemini.</p>
+          </div>
+        )}
+        {messages.map((msg, idx) => (
+          <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div className={`max-w-[80%] rounded-2xl px-5 py-3 ${msg.role === 'user' ? 'bg-purple-600 text-white rounded-tr-none' : 'bg-gray-800 text-gray-200 rounded-tl-none border border-gray-700'}`}>
+              <div className="whitespace-pre-wrap">{msg.text}</div>
             </div>
           </div>
         ))}
         {loading && (
           <div className="flex justify-start">
-            <div className="max-w-lg p-3 rounded-xl bg-gray-700">
-              <Spinner />
+            <div className="bg-gray-800 rounded-2xl rounded-tl-none px-5 py-3 border border-gray-700 flex gap-2 items-center">
+              <span className="w-2 h-2 bg-gray-500 rounded-full animate-bounce"></span>
+              <span className="w-2 h-2 bg-gray-500 rounded-full animate-bounce delay-75"></span>
+              <span className="w-2 h-2 bg-gray-500 rounded-full animate-bounce delay-150"></span>
             </div>
           </div>
         )}
+        <div ref={chatEndRef} />
       </div>
-      <div className="mt-4 flex items-center">
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyPress={(e) => e.key === 'Enter' && handleSend()}
-          placeholder="Type your message..."
-          className="flex-1 p-3 bg-gray-700 rounded-l-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-          disabled={loading}
-        />
-        <button onClick={handleSend} disabled={loading} className="p-3 bg-purple-600 rounded-r-lg hover:bg-purple-700 disabled:bg-purple-900 disabled:cursor-not-allowed">
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-        </button>
+      <div className="p-4 bg-gray-900/80 backdrop-blur-md border-t border-gray-800">
+        <div className="flex gap-2">
+          <Input 
+            value={input} 
+            onChange={e => setInput(e.target.value)} 
+            onKeyDown={e => e.key === 'Enter' && sendMessage()}
+            placeholder="Type your message..." 
+            className="flex-1"
+          />
+          <Button onClick={sendMessage} disabled={loading || !input.trim()}>
+            Send
+          </Button>
+        </div>
       </div>
     </div>
   );
 };
 
-// --- Live Conversation Component ---
-const LiveConversation: React.FC = () => {
-    const [isLive, setIsLive] = useState(false);
-    const [transcription, setTranscription] = useState<{ user: string; model: string }[]>([]);
-    const [currentInput, setCurrentInput] = useState("");
-    const [currentOutput, setCurrentOutput] = useState("");
-    const currentInputRef = useRef('');
-    const currentOutputRef = useRef('');
-
-    const sessionRef = useRef<LiveSession | null>(null);
-    const inputAudioContextRef = useRef<AudioContext | null>(null);
-    const outputAudioContextRef = useRef<AudioContext | null>(null);
-    const streamRef = useRef<MediaStream | null>(null);
-    const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
-    const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-    const nextStartTimeRef = useRef(0);
-    const outputSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
-
-    const [isMusicPlaying, setIsMusicPlaying] = useState(false);
-    const musicAudioRef = useRef<HTMLAudioElement | null>(null);
-    const MUSIC_URL = 'https://www.chosic.com/wp-content/uploads/2021/04/purrple-cat-creek.mp3';
-
-    // This effect handles the creation and cleanup of the audio element.
-    // It runs only on component mount and unmount.
-    useEffect(() => {
-        const audio = new Audio(MUSIC_URL);
-        audio.loop = true;
-        audio.volume = 0.15;
-        musicAudioRef.current = audio;
-
-        // The cleanup function is called when the component unmounts.
-        return () => {
-            audio.pause();
-        };
-    }, []); // Empty dependency array ensures it runs once.
-
-    // This effect handles the play/pause logic based on user interaction.
-    useEffect(() => {
-        if (musicAudioRef.current) {
-            if (isMusicPlaying) {
-                musicAudioRef.current.play().catch(e => console.error("Error playing music:", e));
-            } else {
-                musicAudioRef.current.pause();
-            }
-        }
-    }, [isMusicPlaying]); // Reruns whenever isMusicPlaying changes.
-
-
-    const stopConversation = useCallback(() => {
-        if (sessionRef.current) {
-            sessionRef.current.close();
-            sessionRef.current = null;
-        }
-        if (scriptProcessorRef.current) {
-            scriptProcessorRef.current.disconnect();
-            scriptProcessorRef.current = null;
-        }
-        if (sourceRef.current) {
-            sourceRef.current.disconnect();
-            sourceRef.current = null;
-        }
-        if (streamRef.current) {
-            streamRef.current.getTracks().forEach(track => track.stop());
-            streamRef.current = null;
-        }
-        if (inputAudioContextRef.current && inputAudioContextRef.current.state !== 'closed') {
-            inputAudioContextRef.current.close();
-        }
-        if (outputAudioContextRef.current && outputAudioContextRef.current.state !== 'closed') {
-            outputAudioContextRef.current.close();
-        }
-        outputSourcesRef.current.forEach(source => source.stop());
-        outputSourcesRef.current.clear();
-        setIsLive(false);
-    }, []);
-
-    const startConversation = useCallback(async () => {
-        setIsLive(true);
-        setCurrentInput("");
-        setCurrentOutput("");
-        currentInputRef.current = "";
-        currentOutputRef.current = "";
-        setTranscription([]);
-
-        try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-            inputAudioContextRef.current = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-            outputAudioContextRef.current = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
-            nextStartTimeRef.current = 0;
-
-            const sessionPromise = ai.live.connect({
-                model: 'gemini-2.5-flash-native-audio-preview-09-2025',
-                callbacks: {
-                    onopen: async () => {
-                        console.log('Session opened.');
-                        streamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
-                        const inputAudioContext = inputAudioContextRef.current!;
-                        sourceRef.current = inputAudioContext.createMediaStreamSource(streamRef.current);
-                        scriptProcessorRef.current = inputAudioContext.createScriptProcessor(4096, 1, 1);
-
-                        scriptProcessorRef.current.onaudioprocess = (audioProcessingEvent) => {
-                            const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
-                            const pcmBlob = createAudioBlob(inputData);
-                            sessionPromise.then((session) => {
-                                session.sendRealtimeInput({ media: pcmBlob });
-                            });
-                        };
-                        sourceRef.current.connect(scriptProcessorRef.current);
-                        // The ScriptProcessorNode needs to be connected to the destination for the `onaudioprocess` event to fire.
-                        // This won't cause feedback, as we are not copying the input to the output buffer.
-                        scriptProcessorRef.current.connect(inputAudioContext.destination);
-                    },
-                    onmessage: async (message: LiveServerMessage) => {
-                        if (message.serverContent?.outputTranscription) {
-                            const text = message.serverContent.outputTranscription.text;
-                            currentOutputRef.current += text;
-                            setCurrentOutput(currentOutputRef.current);
-                        }
-                        if (message.serverContent?.inputTranscription) {
-                            const text = message.serverContent.inputTranscription.text;
-                            currentInputRef.current += text;
-                            setCurrentInput(currentInputRef.current);
-                        }
-                        if (message.serverContent?.turnComplete) {
-                            const fullInput = currentInputRef.current;
-                            const fullOutput = currentOutputRef.current;
-                            if (fullInput.trim() || fullOutput.trim()) {
-                                setTranscription(prev => [...prev, { user: fullInput, model: fullOutput }]);
-                            }
-                            currentInputRef.current = "";
-                            currentOutputRef.current = "";
-                            setCurrentInput("");
-                            setCurrentOutput("");
-                        }
-                        const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
-                        if (base64Audio) {
-                            const outputAudioContext = outputAudioContextRef.current!;
-                            nextStartTimeRef.current = Math.max(nextStartTimeRef.current, outputAudioContext.currentTime);
-                            const audioBuffer = await decodeAudioData(decode(base64Audio), outputAudioContext, 24000, 1);
-                            const source = outputAudioContext.createBufferSource();
-                            source.buffer = audioBuffer;
-                            source.connect(outputAudioContext.destination);
-                            source.addEventListener('ended', () => {
-                                outputSourcesRef.current.delete(source);
-                            });
-                            source.start(nextStartTimeRef.current);
-                            nextStartTimeRef.current += audioBuffer.duration;
-                            outputSourcesRef.current.add(source);
-                        }
-                        if (message.serverContent?.interrupted) {
-                            outputSourcesRef.current.forEach(source => source.stop());
-                            outputSourcesRef.current.clear();
-                            nextStartTimeRef.current = 0;
-                        }
-                    },
-                    onerror: (e: ErrorEvent) => {
-                        console.error('Session error:', e);
-                        stopConversation();
-                    },
-                    onclose: () => {
-                        console.log('Session closed.');
-                        stopConversation();
-                    },
-                },
-                config: {
-                    responseModalities: [Modality.AUDIO],
-                    inputAudioTranscription: {},
-                    outputAudioTranscription: {},
-                },
-            });
-            sessionRef.current = await sessionPromise;
-        } catch (error) {
-            console.error("Failed to start conversation:", error);
-            setIsLive(false);
-        }
-    }, [stopConversation]);
-
-    useEffect(() => {
-        return () => stopConversation();
-    }, [stopConversation]);
-    
-    return (
-        <div className="h-full flex flex-col items-center justify-center p-4 bg-gray-800/50 rounded-lg space-y-4">
-            <button
-                onClick={isLive ? stopConversation : startConversation}
-                className={`px-8 py-4 rounded-full text-lg font-semibold transition-all duration-300 flex items-center gap-3 ${
-                    isLive 
-                    ? 'bg-red-500 hover:bg-red-600 text-white shadow-lg shadow-red-500/50' 
-                    : 'bg-green-500 hover:bg-green-600 text-white shadow-lg shadow-green-500/50'
-                }`}
-            >
-                {isLive ? (
-                    <>
-                        <svg className="w-6 h-6 animate-pulse" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM7 9a1 1 0 000 2h6a1 1 0 100-2H7z" clipRule="evenodd"></path></svg>
-                        Stop Conversation
-                    </>
-                ) : (
-                    <>
-                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
-                        Start Conversation
-                    </>
-                )}
-            </button>
-            <button onClick={() => setIsMusicPlaying(!isMusicPlaying)} className="px-4 py-2 bg-gray-600 hover:bg-gray-700 rounded-md text-sm">
-                {isMusicPlaying ? "Stop Background Music" : "Play Background Music"}
-            </button>
-            {isLive && (
-                <div className="w-full h-64 flex-grow bg-gray-900/50 rounded-lg p-4 overflow-y-auto space-y-3">
-                    {transcription.map((t, i) => (
-                        <div key={i}>
-                            <p className="text-purple-300 font-semibold">You:</p>
-                            <p className="text-gray-200 pl-2">{t.user || "..."}</p>
-                            <p className="text-teal-300 font-semibold mt-1">Gemini:</p>
-                            <p className="text-gray-200 pl-2">{t.model || "..."}</p>
-                        </div>
-                    ))}
-                    {currentInput && (
-                        <div>
-                            <p className="text-purple-300 font-semibold">You:</p>
-                            <p className="text-gray-200 pl-2">{currentInput}</p>
-                        </div>
-                    )}
-                    {currentOutput && (
-                        <div>
-                            <p className="text-teal-300 font-semibold">Gemini:</p>
-                            <p className="text-gray-200 pl-2">{currentOutput}</p>
-                        </div>
-                    )}
-                </div>
-            )}
-        </div>
-    );
-};
-
-// --- Image Generation Component ---
+// 2. Image Generation
 const ImageGeneration: React.FC = () => {
-    const [prompt, setPrompt] = useState<string>('');
-    const [aspectRatio, setAspectRatio] = useState<AspectRatio>("1:1");
-    const [numberOfImages, setNumberOfImages] = useState<number>(4);
-    const [images, setImages] = useState<string[]>([]);
-    const [loading, setLoading] = useState<boolean>(false);
-    const [error, setError] = useState<string>('');
+    const [prompt, setPrompt] = useState('');
+    const [generatedImages, setGeneratedImages] = useState<string[]>([]);
+    const [loading, setLoading] = useState(false);
+    const [aspectRatio, setAspectRatio] = useState('1:1');
+    const [numberOfImages, setNumberOfImages] = useState(1);
 
-    const generateImages = async () => {
-        if (!prompt) {
-            setError('Please enter a prompt.');
-            return;
-        }
+    const generate = async () => {
+        if (!prompt) return;
         setLoading(true);
-        setError('');
-        setImages([]);
+        setGeneratedImages([]);
         try {
             const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-            const response = await ai.models.generateImages({
+            const res = await ai.models.generateImages({
                 model: 'imagen-4.0-generate-001',
                 prompt: prompt,
-                config: {
-                    numberOfImages: numberOfImages,
-                    outputMimeType: 'image/jpeg',
-                    aspectRatio: aspectRatio,
+                config: { 
+                    numberOfImages: numberOfImages, 
+                    aspectRatio: (aspectRatio as any), 
+                    outputMimeType: 'image/jpeg' 
                 },
             });
-            
-            const generatedImages = response.generatedImages.map(img => `data:image/jpeg;base64,${img.image.imageBytes}`);
-            setImages(generatedImages);
-        } catch (err) {
-            console.error(err);
-            const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-            setError(`Failed to generate images: ${errorMessage}`);
-        } finally {
-            setLoading(false);
-        }
+            const images = res.generatedImages?.map(img => 
+                `data:image/jpeg;base64,${img.image.imageBytes}`
+            ) || [];
+            if (images.length > 0) setGeneratedImages(images);
+        } catch (e) { console.error(e); } finally { setLoading(false); }
     };
 
     return (
-        <div className="space-y-6">
-            <textarea
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                placeholder="Enter a prompt, e.g., 'A vibrant coral reef with bioluminescent fish'"
-                className="w-full h-24 p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-            />
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-end">
-                 <div>
-                    <label htmlFor="aspect-ratio" className="block text-sm font-medium text-gray-300 mb-1">Aspect Ratio</label>
-                    <select 
-                        id="aspect-ratio"
-                        value={aspectRatio} 
-                        onChange={(e) => setAspectRatio(e.target.value as AspectRatio)}
-                        className="w-full p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    >
-                        <option value="1:1">1:1 (Square)</option>
-                        <option value="16:9">16:9 (Widescreen)</option>
-                        <option value="9:16">9:16 (Portrait)</option>
-                        <option value="4:3">4:3 (Standard)</option>
-                        <option value="3:4">3:4 (Tall)</option>
-                    </select>
-                </div>
-                 <div>
-                    <label htmlFor="num-images" className="block text-sm font-medium text-gray-300 mb-1">Number of Images: <span className="font-bold text-purple-300">{numberOfImages}</span></label>
-                    <input
-                        id="num-images"
-                        type="range"
-                        min="1"
-                        max="4"
-                        step="1"
-                        value={numberOfImages}
-                        onChange={(e) => setNumberOfImages(Number(e.target.value))}
-                        className="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-purple-500"
-                    />
-                </div>
-                <button onClick={generateImages} disabled={loading} className="w-full p-3 bg-purple-600 rounded-lg font-bold hover:bg-purple-700 disabled:bg-purple-900 disabled:cursor-not-allowed">
-                    {loading ? 'Generating...' : 'Generate'}
-                </button>
-            </div>
-            {loading && <div className="flex justify-center"><Spinner message="Generating images..." /></div>}
-            {error && <p className="text-red-400 text-center">{error}</p>}
-            {images.length > 0 && (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    {images.map((img, index) => (
-                        <a href={img} download={`generated-image-${index}.jpg`} key={index}>
-                           <img src={img} alt={`Generated image ${index + 1}`} className="rounded-lg hover:opacity-80 transition-opacity" />
-                        </a>
-                    ))}
-                </div>
-            )}
-        </div>
-    );
-};
-
-// --- Image Editing Component ---
-const ImageEditing: React.FC = () => {
-    const [imageFile, setImageFile] = useState<File | null>(null);
-    const [imagePreview, setImagePreview] = useState<string>('');
-    const [prompt, setPrompt] = useState<string>('');
-    const [editedImage, setEditedImage] = useState<string>('');
-    const [loading, setLoading] = useState<boolean>(false);
-    const [error, setError] = useState<string>('');
-
-    const handleFileSelect = (file: File) => {
-        setImageFile(file);
-        setEditedImage('');
-        setError('');
-        const reader = new FileReader();
-        reader.onloadend = () => {
-            setImagePreview(reader.result as string);
-        };
-        reader.readAsDataURL(file);
-    };
-
-    const editImage = async () => {
-        if (!imageFile || !prompt) {
-            setError('Please upload an image and provide an editing instruction.');
-            return;
-        }
-        setLoading(true);
-        setError('');
-        setEditedImage('');
-        try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-            const base64Image = await fileToBase64(imageFile);
-            const response = await ai.models.generateContent({
-                model: 'gemini-2.5-flash-image',
-                contents: {
-                    parts: [
-                        { inlineData: { data: base64Image, mimeType: imageFile.type } },
-                        { text: prompt },
-                    ],
-                },
-                config: {
-                    responseModalities: [Modality.IMAGE],
-                },
-            });
-
-            const imagePart = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-            if (imagePart?.inlineData) {
-                setEditedImage(`data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`);
-            } else {
-                 // If the model replies with text, it's usually an error or refusal.
-                const textResponse = response.text;
-                if (textResponse) {
-                     throw new Error(`Model returned a text response: ${textResponse}`);
-                } else {
-                     throw new Error('Model did not return an edited image.');
-                }
-            }
-        } catch (err) {
-            console.error(err);
-            const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-            setError(`Failed to edit image: ${errorMessage}`);
-        } finally {
-            setLoading(false);
-        }
-    };
-    
-    return (
-        <div className="space-y-6">
-            {/* Controls */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-                 <div className="space-y-2">
-                    <label className="font-semibold">1. Upload Image</label>
-                    <FileUploader onFileSelect={handleFileSelect} accept="image/*" label="Click to upload" />
+        <div className="max-w-4xl mx-auto space-y-8">
+            <Card className="p-6 space-y-4">
+                 <div className="flex flex-col gap-4">
+                     <div className="flex-1">
+                        <Label>Image Description</Label>
+                        <TextArea value={prompt} onChange={e => setPrompt(e.target.value)} placeholder="e.g. A futuristic city made of crystal" className="min-h-[100px]" />
+                     </div>
+                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                         <div>
+                            <Label>Aspect Ratio</Label>
+                            <select value={aspectRatio} onChange={e => setAspectRatio(e.target.value)} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-3 text-white outline-none focus:border-purple-500">
+                                <option value="1:1">1:1 Square</option>
+                                <option value="16:9">16:9 Landscape</option>
+                                <option value="9:16">9:16 Portrait</option>
+                                <option value="4:3">4:3 Standard</option>
+                                <option value="3:4">3:4 Standard</option>
+                            </select>
+                         </div>
+                         <div>
+                            <Label>Number of Images: {numberOfImages}</Label>
+                            <div className="flex items-center gap-4 bg-gray-900 border border-gray-700 rounded-lg p-3">
+                                <input type="range" min="1" max="4" value={numberOfImages} onChange={e => setNumberOfImages(parseInt(e.target.value))} className="w-full accent-purple-500 cursor-pointer" />
+                                <span className="font-mono text-white font-bold w-4 text-center">{numberOfImages}</span>
+                            </div>
+                         </div>
+                     </div>
                  </div>
-                 <div className="space-y-2">
-                    <label className="font-semibold">2. Provide Instructions</label>
-                    <textarea
-                        value={prompt}
-                        onChange={(e) => setPrompt(e.target.value)}
-                        placeholder="e.g., 'Add a birthday hat to the cat'"
-                        className="w-full h-24 p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    />
-                 </div>
-            </div>
-             <button onClick={editImage} disabled={loading || !imageFile || !prompt} className="w-full p-3 bg-purple-600 rounded-lg font-bold hover:bg-purple-700 disabled:bg-purple-900 disabled:cursor-not-allowed">
-                {loading ? 'Editing...' : '3. Edit Image'}
-            </button>
-            
-            {/* Image Previews */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start mt-6">
-                <div className="space-y-2">
-                    <h3 className="text-xl font-bold text-center mb-2">Original</h3>
-                    {imagePreview ? (
-                        <div className="w-full h-96 relative">
-                            <ZoomableImage src={imagePreview} alt="Original preview" />
-                        </div>
-                    ) : (
-                        <div className="w-full h-96 bg-gray-800 rounded-lg flex items-center justify-center text-gray-500 border-2 border-dashed border-gray-600">
-                            <p className="text-center">Upload an image to see it here</p>
-                        </div>
-                    )}
-                </div>
-                <div className="space-y-2">
-                    <h3 className="text-xl font-bold text-center mb-2">Edited</h3>
-                    <div className="w-full h-96 bg-gray-800 rounded-lg flex items-center justify-center relative border-2 border-dashed border-gray-600 p-4">
-                        {loading && <Spinner message="Applying edits..." />}
-                        {!loading && error && <p className="text-red-400 text-center">{error}</p>}
-                        {!loading && !error && editedImage && <ZoomableImage src={editedImage} alt="Edited result" />}
-                        {!loading && !error && !editedImage && <p className="text-gray-500 text-center">Your edited image will appear here</p>}
-                    </div>
-                    {!loading && editedImage && (
-                        <a href={editedImage} download="edited-image.png" className="mt-2 w-full text-center inline-block px-6 py-3 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700">
-                            Download Edited Image
-                        </a>
-                    )}
-                </div>
-            </div>
-        </div>
-    );
-};
+                 <Button onClick={generate} disabled={loading || !prompt} className="w-full">
+                     {loading ? 'Generating...' : `Generate ${numberOfImages} Image${numberOfImages > 1 ? 's' : ''}`}
+                 </Button>
+            </Card>
 
-// --- Nano Banana Studio Component ---
-const NanoBananaStudio: React.FC = () => {
-    const [history, setHistory] = useState<string[]>([]);
-    const [currentIndex, setCurrentIndex] = useState<number>(-1);
-    const [prompt, setPrompt] = useState<string>('');
-    const [loading, setLoading] = useState<boolean>(false);
-    const [error, setError] = useState<string>('');
-    const initialFile = useRef<File | null>(null);
-
-    const dataUrlToParts = (dataUrl: string) => {
-        const [meta, data] = dataUrl.split(',');
-        const mimeType = meta.substring(meta.indexOf(':') + 1, meta.indexOf(';'));
-        return { data, mimeType };
-    };
-
-    const handleFileSelect = (file: File) => {
-        initialFile.current = file;
-        const reader = new FileReader();
-        reader.onloadend = () => {
-            const result = reader.result as string;
-            setHistory([result]);
-            setCurrentIndex(0);
-            setError('');
-        };
-        reader.readAsDataURL(file);
-    };
-
-    const handleGenerate = async () => {
-        if (!prompt || currentIndex < 0) {
-            setError('Please provide instructions.');
-            return;
-        }
-        setLoading(true);
-        setError('');
-        try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-            const currentImageUrl = history[currentIndex];
-            const { data: base64Image, mimeType } = dataUrlToParts(currentImageUrl);
-
-            const response = await ai.models.generateContent({
-                model: 'gemini-2.5-flash-image',
-                contents: {
-                    parts: [
-                        { inlineData: { data: base64Image, mimeType: mimeType } },
-                        { text: prompt },
-                    ],
-                },
-                config: { responseModalities: [Modality.IMAGE] },
-            });
-
-            const imagePart = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-            if (imagePart?.inlineData) {
-                const newImageUrl = `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`;
-                const newHistory = history.slice(0, currentIndex + 1);
-                newHistory.push(newImageUrl);
-                setHistory(newHistory);
-                setCurrentIndex(newHistory.length - 1);
-            } else {
-                 const textResponse = response.text;
-                if (textResponse) {
-                     throw new Error(`Model returned a text response: ${textResponse}`);
-                } else {
-                     throw new Error('Model did not return an image.');
-                }
-            }
-        } catch (err) {
-            console.error(err);
-            setError(`Failed to edit: ${err instanceof Error ? err.message : 'Unknown error'}`);
-        } finally {
-            setLoading(false);
-        }
-    };
-    
-    const handleReset = () => {
-      if (initialFile.current) {
-        handleFileSelect(initialFile.current);
-      }
-    };
-
-    const presetPrompts = [
-        "Remove the background, making it transparent.",
-        "Turn this into a cartoon.",
-        "Add cool sunglasses to the main subject.",
-        "Convert this image into a pencil sketch.",
-        "Make the colors more vibrant and cinematic."
-    ];
-
-    if (history.length === 0) {
-        return (
-            <div className="flex flex-col items-center justify-center h-full">
-                <FileUploader onFileSelect={handleFileSelect} accept="image/*" label="Upload an image to start editing" />
-            </div>
-        );
-    }
-    
-    return (
-        <div className="flex h-full gap-6">
-            <div className="flex-1 flex flex-col gap-4">
-                <div className="flex items-center gap-2 flex-wrap">
-                    <button onClick={() => setCurrentIndex(i => Math.max(0, i - 1))} disabled={currentIndex <= 0 || loading} className="px-4 py-2 bg-gray-700 rounded-md disabled:opacity-50 hover:bg-gray-600">Undo</button>
-                    <button onClick={() => setCurrentIndex(i => Math.min(history.length - 1, i + 1))} disabled={currentIndex >= history.length - 1 || loading} className="px-4 py-2 bg-gray-700 rounded-md disabled:opacity-50 hover:bg-gray-600">Redo</button>
-                    <button onClick={handleReset} disabled={loading} className="px-4 py-2 bg-red-800 rounded-md hover:bg-red-700">Reset to Original</button>
-                </div>
-                <div className="flex-1 bg-gray-800 rounded-lg flex items-center justify-center p-2 relative min-h-0">
-                    <ZoomableImage src={history[currentIndex]} alt={`Version ${currentIndex + 1}`} />
-                    {loading && <div className="absolute inset-0 bg-black/60 flex items-center justify-center rounded-lg"><Spinner message="Generating..." /></div>}
-                </div>
-                 {error && <p className="text-red-400 text-center">{error}</p>}
-                <div className="space-y-2">
-                    <div className="flex flex-wrap gap-2">
-                        {presetPrompts.map(p => (
-                            <button key={p} onClick={() => setPrompt(p)} className="px-3 py-1.5 bg-gray-700 text-sm rounded-full hover:bg-purple-600 transition-colors">{p}</button>
+            <div className="min-h-[400px]">
+                {loading ? (
+                    <Spinner message="Imagen 4.0 is dreaming..." />
+                ) : generatedImages.length > 0 ? (
+                    <div className={`grid gap-6 ${generatedImages.length === 1 ? 'grid-cols-1' : 'grid-cols-1 md:grid-cols-2'}`}>
+                        {generatedImages.map((img, idx) => (
+                            <div key={idx} className="relative group rounded-xl overflow-hidden shadow-2xl">
+                                <img src={img} alt={`Generated ${idx + 1}`} className="w-full h-auto object-contain border border-gray-700" />
+                                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-4 backdrop-blur-sm">
+                                    <a href={img} download={`generated-${idx + 1}.jpg`} className="bg-white text-black px-6 py-2 rounded-full font-bold hover:bg-gray-200 transition-colors shadow-lg">Download</a>
+                                </div>
+                            </div>
                         ))}
                     </div>
-                    <div className="flex gap-2">
-                        <input
-                            type="text"
-                            value={prompt}
-                            onChange={(e) => setPrompt(e.target.value)}
-                            onKeyPress={(e) => e.key === 'Enter' && handleGenerate()}
-                            placeholder="Describe your edit..."
-                            className="flex-1 p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-                            disabled={loading}
+                ) : null}
+            </div>
+        </div>
+    );
+};
+
+// Dedicated YouTube Thumbnail Tool
+const YouTubeThumbnailTool: React.FC = () => {
+    const [title, setTitle] = useState('');
+    const [baseImage, setBaseImage] = useState<File | null>(null);
+    const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+    const [numberOfImages, setNumberOfImages] = useState(1);
+    const [resultImages, setResultImages] = useState<string[]>([]);
+    const [loading, setLoading] = useState(false);
+
+    const generateThumbnails = async () => {
+        if (!title) return;
+        setLoading(true);
+        setResultImages([]);
+        try {
+            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+            const prompt = `YouTube thumbnail for: ${title}. High-impact, professional, cinematic lighting, vibrant colors, attention-grabbing. 16:9 aspect ratio.`;
+
+            if (baseImage) {
+                const base64 = await fileToBase64(baseImage);
+                const generated: string[] = [];
+                for (let i = 0; i < numberOfImages; i++) {
+                    const response = await ai.models.generateContent({
+                        model: 'gemini-2.5-flash-image',
+                        contents: {
+                            parts: [
+                                { inlineData: { data: base64, mimeType: baseImage.type } },
+                                { text: `Transform this image into a professional YouTube thumbnail for: "${title}". Make it catchy with high contrast.` }
+                            ]
+                        },
+                        config: { imageConfig: { aspectRatio: '16:9' } }
+                    });
+
+                    const parts = response.candidates?.[0]?.content?.parts;
+                    if (parts) {
+                        for (const part of parts) {
+                            if (part.inlineData) {
+                                generated.push(`data:image/png;base64,${part.inlineData.data}`);
+                                break;
+                            }
+                        }
+                    }
+                }
+                setResultImages(generated);
+            } else {
+                const res = await ai.models.generateImages({
+                    model: 'imagen-4.0-generate-001',
+                    prompt: prompt,
+                    config: { 
+                        numberOfImages: numberOfImages, 
+                        aspectRatio: '16:9', 
+                        outputMimeType: 'image/jpeg' 
+                    },
+                });
+                const images = res.generatedImages?.map(img => 
+                    `data:image/jpeg;base64,${img.image.imageBytes}`
+                ) || [];
+                setResultImages(images);
+            }
+        } catch (e) {
+            console.error(e);
+            alert("Thumbnail generation failed. Please try again.");
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div className="max-w-4xl mx-auto space-y-6">
+            <Card className="p-6 space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="space-y-4">
+                        <div>
+                            <Label>Video Topic / Title</Label>
+                            <TextArea 
+                                value={title} 
+                                onChange={e => setTitle(e.target.value)} 
+                                placeholder="e.g. How to Build a Tech Empire from Zero" 
+                                className="min-h-[120px]" 
+                            />
+                        </div>
+                        <div>
+                            <Label>Number of Variations: {numberOfImages}</Label>
+                            <div className="flex items-center gap-4 bg-gray-900 border border-gray-700 rounded-lg p-3">
+                                <input 
+                                    type="range" 
+                                    min="1" 
+                                    max="4" 
+                                    value={numberOfImages} 
+                                    onChange={e => setNumberOfImages(parseInt(e.target.value))} 
+                                    className="w-full accent-purple-500 cursor-pointer" 
+                                />
+                                <span className="font-mono text-white font-bold w-4 text-center">{numberOfImages}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div>
+                        <Label>Base Image (Optional)</Label>
+                        <FileUploader 
+                            accept="image/*" 
+                            onFileSelect={(f) => { setBaseImage(f); setPreviewUrl(URL.createObjectURL(f)); }} 
+                            previewUrl={previewUrl}
+                            onClear={() => { setBaseImage(null); setPreviewUrl(null); }}
+                            label="Upload portrait or subject"
                         />
-                        <button onClick={handleGenerate} disabled={loading || !prompt} className="p-3 bg-purple-600 rounded-lg font-bold hover:bg-purple-700 disabled:bg-purple-900">Generate</button>
                     </div>
                 </div>
-            </div>
-            <aside className="w-40 flex-shrink-0 bg-gray-800/50 rounded-lg p-2 flex flex-col">
-                <h3 className="font-bold text-center mb-2 flex-shrink-0">History</h3>
-                <div className="overflow-y-auto h-full space-y-2 pr-1">
-                    {history.map((imgSrc, index) => (
-                        <div key={index} className={`relative cursor-pointer rounded-md overflow-hidden ${index === currentIndex ? 'ring-2 ring-purple-500' : ''}`} onClick={() => !loading && setCurrentIndex(index)}>
-                            <img src={imgSrc} alt={`Version ${index + 1}`} className="w-full h-auto" />
-                            <div className="absolute bottom-0 left-0 bg-black/70 text-white text-xs px-1.5 py-0.5 rounded-tr-md">{index + 1}</div>
-                        </div>
+                
+                <Button 
+                    onClick={generateThumbnails} 
+                    disabled={loading || !title} 
+                    className="w-full"
+                >
+                    {loading ? 'Designing Your Thumbnails...' : `Generate ${numberOfImages} Thumbnail${numberOfImages > 1 ? 's' : ''}`}
+                </Button>
+            </Card>
+
+            {loading && <Spinner message="Gemini is analyzing click-rate trends and rendering your design..." />}
+
+            {resultImages.length > 0 && (
+                <div className={`grid gap-6 ${resultImages.length === 1 ? 'grid-cols-1' : 'grid-cols-1 md:grid-cols-2'} animate-fade-in`}>
+                    {resultImages.map((img, idx) => (
+                        <Card key={idx} className="relative group overflow-hidden border border-gray-700 shadow-2xl">
+                            <img src={img} alt={`Thumbnail ${idx + 1}`} className="w-full h-auto object-contain" />
+                            <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-4 backdrop-blur-sm">
+                                <a 
+                                    href={img} 
+                                    download={`thumbnail-${idx + 1}.jpg`} 
+                                    className="bg-white text-black px-6 py-2 rounded-full font-bold hover:bg-gray-200 transition-colors shadow-lg"
+                                >
+                                    Download
+                                </a>
+                            </div>
+                        </Card>
                     ))}
                 </div>
-            </aside>
+            )}
         </div>
     );
 };
 
+// 3. Media Analyzer (Image/Video/Audio Understanding & Transcription)
+const MediaAnalyzer: React.FC<{ 
+  mode: 'image' | 'video' | 'audio', 
+  title?: string, 
+  transcription?: boolean 
+}> = ({ mode, title, transcription }) => {
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [prompt, setPrompt] = useState(transcription ? 'Transcribe this file.' : 'Describe this content in detail.');
+  const [result, setResult] = useState('');
+  const [loading, setLoading] = useState(false);
 
-// --- Image Background Remover Component ---
-const ImageBackgroundRemover: React.FC = () => {
-    const [imageFile, setImageFile] = useState<File | null>(null);
-    const [imagePreview, setImagePreview] = useState<string>('');
-    const [resultImage, setResultImage] = useState<string>('');
-    const [loading, setLoading] = useState<boolean>(false);
-    const [error, setError] = useState<string>('');
+  const handleFile = (f: File) => {
+    setFile(f);
+    setPreview(URL.createObjectURL(f));
+    setResult('');
+  };
 
-    const handleFileSelect = (file: File) => {
-        setImageFile(file);
-        setResultImage('');
-        setError('');
-        const reader = new FileReader();
-        reader.onloadend = () => {
-            setImagePreview(reader.result as string);
-        };
-        reader.readAsDataURL(file);
-    };
-
-    const handleRemoveBackground = async () => {
-        if (!imageFile) {
-            setError('Please upload an image first.');
-            return;
+  const handleProcess = async () => {
+    if (!file) return;
+    setLoading(true);
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+      const base64 = await fileToBase64(file);
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: {
+          parts: [
+            { inlineData: { data: base64, mimeType: file.type } },
+            { text: prompt }
+          ]
         }
-        setLoading(true);
-        setError('');
-        setResultImage('');
-        try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-            const base64Image = await fileToBase64(imageFile);
-            const response = await ai.models.generateContent({
-                model: 'gemini-2.5-flash-image',
-                contents: {
-                    parts: [
-                        { inlineData: { data: base64Image, mimeType: imageFile.type } },
-                        { text: 'Task: Background Removal. Identify the main subject in the image. Remove the background completely, making it transparent. The output should be a PNG image containing only the subject.' },
-                    ],
-                },
-                config: {
-                    responseModalities: [Modality.IMAGE],
-                },
-            });
+      });
+      setResult(response.text || 'No response generated.');
+    } catch (e) {
+      console.error(e);
+      setResult(`Error: ${(e as Error).message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-            const imagePart = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-            if (imagePart?.inlineData) {
-                setResultImage(`data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`);
-            } else {
-                 const textResponse = response.text;
-                if (textResponse) {
-                     throw new Error(`Model returned a text response: ${textResponse}`);
-                } else {
-                     throw new Error('Model did not return an image.');
-                }
-            }
-        } catch (err) {
-            console.error(err);
-            const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-            setError(`Failed to remove background: ${errorMessage}`);
-        } finally {
-            setLoading(false);
-        }
-    };
-    
-    return (
-        <div className="space-y-6">
-            <p className="text-gray-400">Upload an image and the AI will automatically remove the background, leaving a transparent result perfect for any project.</p>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
-                 <div className="md:col-span-2">
-                    <FileUploader onFileSelect={handleFileSelect} accept="image/*" label="Click to upload an image" />
-                 </div>
-                 <button onClick={handleRemoveBackground} disabled={loading || !imageFile} className="w-full p-3 bg-purple-600 rounded-lg font-bold hover:bg-purple-700 disabled:bg-purple-900 disabled:cursor-not-allowed">
-                    {loading ? 'Removing...' : 'Remove Background'}
-                </button>
-            </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start mt-6">
-                <div className="space-y-2">
-                    <h3 className="text-xl font-bold text-center mb-2">Original</h3>
-                    {imagePreview ? (
-                        <div className="w-full h-96 relative bg-gray-800 rounded-lg">
-                            <ZoomableImage src={imagePreview} alt="Original preview" />
-                        </div>
-                    ) : (
-                        <div className="w-full h-96 bg-gray-800 rounded-lg flex items-center justify-center text-gray-500 border-2 border-dashed border-gray-600">
-                            <p className="text-center">Upload an image to see it here</p>
-                        </div>
-                    )}
-                </div>
-                <div className="space-y-2">
-                    <h3 className="text-xl font-bold text-center mb-2">Result</h3>
-                    <div 
-                        className="w-full h-96 rounded-lg flex items-center justify-center relative border-2 border-dashed border-gray-600 p-4"
-                        style={{
-                            backgroundImage: 'repeating-conic-gradient(#4b5563 0% 25%, transparent 0% 50%)',
-                            backgroundSize: '20px 20px'
-                        }}
-                    >
-                        {loading && <Spinner message="Processing image..." />}
-                        {!loading && error && <p className="text-red-400 text-center">{error}</p>}
-                        {!loading && !error && resultImage && <ZoomableImage src={resultImage} alt="Background removed result" />}
-                        {!loading && !error && !resultImage && <p className="text-gray-500 text-center">Your result will appear here</p>}
-                    </div>
-                    {!loading && resultImage && (
-                        <a href={resultImage} download="background-removed.png" className="mt-2 w-full text-center inline-block px-6 py-3 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700">
-                            Download Result
-                        </a>
-                    )}
-                </div>
-            </div>
+  return (
+    <div className="max-w-4xl mx-auto space-y-6">
+      <Card className="p-6">
+        <Label>{title || `Upload ${mode.charAt(0).toUpperCase() + mode.slice(1)}`}</Label>
+        <FileUploader 
+          accept={`${mode}/*`} 
+          onFileSelect={handleFile} 
+          previewUrl={preview} 
+          onClear={() => { setFile(null); setPreview(null); setResult(''); }} 
+        />
+        <div className="mt-4">
+           <Label>Instruction</Label>
+           <TextArea value={prompt} onChange={e => setPrompt(e.target.value)} />
         </div>
-    );
+        <Button onClick={handleProcess} disabled={!file || loading} className="w-full mt-4">
+          {loading ? 'Processing...' : 'Analyze'}
+        </Button>
+      </Card>
+      {result && (
+        <Card className="p-6 bg-gray-800/80">
+          <Label>Result</Label>
+          <div className="prose prose-invert max-w-none whitespace-pre-wrap text-gray-300">
+            {result}
+          </div>
+        </Card>
+      )}
+    </div>
+  );
 };
 
+// 4. Video Studio (Generation & Animation)
+const VideoStudio: React.FC<{ mode: 'text-to-video' | 'image-to-video' }> = ({ mode }) => {
+  const [prompt, setPrompt] = useState('');
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
 
-// --- Image Animation Component ---
-const ImageAnimation: React.FC = () => {
-    const [imageFile, setImageFile] = useState<File | null>(null);
-    const [imagePreview, setImagePreview] = useState<string>('');
-    const [prompt, setPrompt] = useState<string>('');
-    const [outputUrl, setOutputUrl] = useState<string>('');
-    const [outputType, setOutputType] = useState<'video' | 'gif'>('video');
-    const [selectedFormat, setSelectedFormat] = useState<'video' | 'gif'>('video');
-    const [loading, setLoading] = useState<boolean>(false);
-    const [loadingMessage, setLoadingMessage] = useState<string>('');
-    const [error, setError] = useState<string>('');
-    const [apiKeySelected, setApiKeySelected] = useState<boolean>(true); // Assume true initially
-
-    const checkApiKey = useCallback(async () => {
-        if (window.aistudio?.hasSelectedApiKey) {
-            const hasKey = await window.aistudio.hasSelectedApiKey();
-            setApiKeySelected(hasKey);
-            return hasKey;
-        }
-        // If the aistudio object is not available, assume we can proceed
-        return true;
-    }, []);
-
-    useEffect(() => {
-        checkApiKey();
-    }, [checkApiKey]);
-
-    const handleSelectKey = async () => {
-        if (window.aistudio?.openSelectKey) {
+  const handleGenerate = async () => {
+    if (!prompt && !imageFile) return;
+    setLoading(true);
+    setVideoUrl(null);
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+      if (window.aistudio?.hasSelectedApiKey) {
+        const hasKey = await window.aistudio.hasSelectedApiKey();
+        if (!hasKey && window.aistudio.openSelectKey) {
             await window.aistudio.openSelectKey();
-            // Assume key selection is successful and let the user retry
-            setApiKeySelected(true);
         }
-    };
-    
-    const animateImage = async () => {
-        if (!imageFile) {
-            setError('Please upload an image first.');
-            return;
-        }
+      }
 
-        setLoading(true);
-        setError('');
-        setOutputUrl('');
-        
-        if (selectedFormat === 'video') {
-            const hasKey = await checkApiKey();
-            if (!hasKey) {
-                setLoading(false);
-                return; // Stop execution if key is not selected
-            }
-            setLoadingMessage("Initializing video generation... This may take a few minutes.");
+      let operation;
+      if (imageFile) {
+        const base64 = await fileToBase64(imageFile);
+        operation = await ai.models.generateVideos({
+          model: 'veo-3.1-fast-generate-preview',
+          prompt: prompt || "Animate this image",
+          image: { imageBytes: base64, mimeType: imageFile.type },
+          config: { numberOfVideos: 1, resolution: '720p', aspectRatio: '16:9' }
+        });
+      } else {
+        operation = await ai.models.generateVideos({
+            model: 'veo-3.1-fast-generate-preview',
+            prompt: prompt,
+            config: { numberOfVideos: 1, resolution: '720p', aspectRatio: '16:9' }
+        });
+      }
 
-            try {
-                const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-                const base64Image = await fileToBase64(imageFile);
-                let operation: VideosOperation = await ai.models.generateVideos({
-                    model: 'veo-3.1-fast-generate-preview',
-                    prompt: prompt || 'Animate this image subtly.',
-                    image: { imageBytes: base64Image, mimeType: imageFile.type },
-                    config: { numberOfVideos: 1, resolution: '720p', aspectRatio: '16:9' }
-                });
+      while (!operation.done) {
+        await new Promise(r => setTimeout(r, 10000));
+        operation = await ai.operations.getVideosOperation({ operation });
+      }
 
-                setLoadingMessage("Processing video... Your animation is being created.");
-                while (!operation.done) {
-                    await new Promise(resolve => setTimeout(resolve, 10000));
-                    operation = await ai.operations.getVideosOperation({ operation: operation });
-                }
+      const uri = operation.response?.generatedVideos?.[0]?.video?.uri;
+      if (uri) {
+        const vidRes = await fetch(`${uri}&key=${process.env.API_KEY}`);
+        const blob = await vidRes.blob();
+        setVideoUrl(URL.createObjectURL(blob));
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Generation failed. Ensure you have a paid project selected for Veo.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
-                const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-                if (downloadLink) {
-                    const response = await fetch(`${downloadLink}&key=${process.env.API_KEY}`);
-                    const blob = await response.blob();
-                    setOutputUrl(URL.createObjectURL(blob));
-                    setOutputType('video');
-                } else {
-                    throw new Error('Video generation finished but no download link was provided.');
-                }
-            } catch (err) {
-                console.error(err);
-                const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-                if (errorMessage.includes("Requested entity was not found")) {
-                    setError("API Key error. Please select a valid API key and try again.");
-                    setApiKeySelected(false);
-                } else {
-                    setError(`Failed to generate video: ${errorMessage}`);
-                }
-            } finally {
-                setLoading(false);
-                setLoadingMessage('');
-            }
-        } else { // GIF generation
-            setLoadingMessage("Generating animated GIF...");
-            try {
-                const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-                const base64Image = await fileToBase64(imageFile);
-                
-                const response = await ai.models.generateContent({
-                  model: 'gemini-2.5-flash-image',
-                  contents: {
-                    parts: [
-                      { inlineData: { data: base64Image, mimeType: imageFile.type } },
-                      { text: prompt || 'Turn this image into a short, looping animated GIF.' },
-                    ],
-                  },
-                  config: {
-                      responseModalities: [Modality.IMAGE],
-                  },
-                });
-
-                const imagePart = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-                if (imagePart?.inlineData && imagePart.inlineData.mimeType.startsWith('image/')) {
-                    setOutputUrl(`data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`);
-                    setOutputType('gif');
-                } else {
-                    throw new Error('Model did not return a valid animated image.');
-                }
-            } catch (err) {
-                console.error(err);
-                const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-                setError(`Failed to generate GIF: ${errorMessage}`);
-            } finally {
-                setLoading(false);
-                setLoadingMessage('');
-            }
-        }
-    };
-    
-    return (
-        <div className="space-y-6">
-            <FileUploader 
-                onFileSelect={(file) => {
-                    setImageFile(file);
-                    const reader = new FileReader();
-                    reader.onloadend = () => setImagePreview(reader.result as string);
-                    reader.readAsDataURL(file);
-                }} 
-                accept="image/*" 
-                label="Upload an image to animate"
-            />
-            {imagePreview && <img src={imagePreview} alt="Preview" className="rounded-lg max-w-sm mx-auto" />}
-            
-            <textarea
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                placeholder="Animation prompt (optional), e.g., 'Make the clouds move'"
-                className="w-full h-20 p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-            />
-             <div className="flex items-center justify-center space-x-4">
-                <span className="text-lg font-semibold">Output Format:</span>
-                <label className="flex items-center space-x-2 cursor-pointer">
-                    <input type="radio" name="format" value="video" checked={selectedFormat === 'video'} onChange={() => setSelectedFormat('video')} className="form-radio h-5 w-5 text-purple-600 bg-gray-700 border-gray-600 focus:ring-purple-500"/>
-                    <span>Video</span>
-                </label>
-                <label className="flex items-center space-x-2 cursor-pointer">
-                    <input type="radio" name="format" value="gif" checked={selectedFormat === 'gif'} onChange={() => setSelectedFormat('gif')} className="form-radio h-5 w-5 text-purple-600 bg-gray-700 border-gray-600 focus:ring-purple-500"/>
-                    <span>GIF</span>
-                </label>
-            </div>
-
-            {!apiKeySelected && selectedFormat === 'video' ? (
-                <div className="text-center p-4 bg-yellow-900/50 rounded-lg">
-                    <p className="mb-2 text-yellow-300">An API key is required for video generation.</p>
-                    <button onClick={handleSelectKey} className="px-4 py-2 bg-yellow-600 hover:bg-yellow-700 rounded-lg font-bold">
-                        Select API Key
-                    </button>
-                    <p className="text-xs mt-2 text-gray-400">For more information, see the <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="underline">billing documentation</a>.</p>
-                </div>
-            ) : (
-                <button onClick={animateImage} disabled={loading || !imageFile} className="w-full p-3 bg-purple-600 rounded-lg font-bold hover:bg-purple-700 disabled:bg-purple-900 disabled:cursor-not-allowed">
-                    {loading ? 'Animating...' : 'Animate Image'}
-                </button>
-            )}
-
-            {loading && <div className="flex justify-center"><Spinner message={loadingMessage} /></div>}
-            {error && <p className="text-red-400 text-center">{error}</p>}
-            
-            {outputUrl && (
-                <div className="text-center">
-                    <h3 className="text-xl font-bold mb-2">Animated Result</h3>
-                    {outputType === 'video' ? (
-                        <video src={outputUrl} controls autoPlay loop className="rounded-lg mx-auto max-w-full" />
-                    ) : (
-                        <img src={outputUrl} alt="Animated GIF result" className="rounded-lg mx-auto max-w-full" />
-                    )}
-                     <a href={outputUrl} download={`animated-result.${outputType}`} className="mt-4 inline-block px-6 py-2 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700">
-                        Download Result
-                    </a>
-                </div>
-            )}
-        </div>
-    );
+  return (
+    <div className="max-w-4xl mx-auto space-y-6">
+       <Card className="p-6">
+         <div className="space-y-4">
+           {mode === 'image-to-video' && (
+             <div>
+               <Label>Starting Image</Label>
+               <FileUploader 
+                 accept="image/*" 
+                 onFileSelect={(f) => { setImageFile(f); setPreview(URL.createObjectURL(f)); }} 
+                 previewUrl={preview} 
+               />
+             </div>
+           )}
+           <div>
+             <Label>{mode === 'image-to-video' ? 'Animation Prompt' : 'Video Prompt'}</Label>
+             <TextArea 
+               value={prompt} 
+               onChange={e => setPrompt(e.target.value)} 
+               placeholder={mode === 'image-to-video' ? "e.g., Make the water flow and clouds move" : "e.g., A cinematic drone shot of a cyberpunk city"}
+             />
+           </div>
+           <Button onClick={handleGenerate} disabled={loading || (!prompt && !imageFile)} className="w-full">
+             {loading ? 'Generating Video (this may take a minute)...' : 'Generate Video'}
+           </Button>
+         </div>
+       </Card>
+       {loading && <Spinner message="Veo is rendering your video..." />}
+       {videoUrl && (
+         <Card className="p-4">
+           <Label>Generated Video</Label>
+           <video src={videoUrl} controls className="w-full rounded-lg" />
+           <div className="mt-4 flex justify-end">
+             <a href={videoUrl} download="generated_video.mp4" className="text-purple-400 hover:text-white underline">Download MP4</a>
+           </div>
+         </Card>
+       )}
+    </div>
+  );
 };
 
-// --- Image Understanding Component ---
-const ImageUnderstanding: React.FC = () => {
-    const [imageFile, setImageFile] = useState<File | null>(null);
-    const [imagePreview, setImagePreview] = useState<string>('');
-    const [prompt, setPrompt] = useState<string>('Describe this image in detail.');
-    const [response, setResponse] = useState<string>('');
-    const [loading, setLoading] = useState<boolean>(false);
-    const [error, setError] = useState<string>('');
+// 5. Image Editor
+const ImageEditor: React.FC<{ mode: 'edit' | 'remove-bg' | 'studio' }> = ({ mode }) => {
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [prompt, setPrompt] = useState(mode === 'remove-bg' ? 'Remove the background and show the subject on a white background' : '');
+  const [resultImg, setResultImg] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
-    const handleFileSelect = (file: File) => {
-        setImageFile(file);
-        setResponse('');
-        setError('');
-        const reader = new FileReader();
-        reader.onloadend = () => {
-            setImagePreview(reader.result as string);
-        };
-        reader.readAsDataURL(file);
-    };
-
-    const understandImage = async () => {
-        if (!imageFile) {
-            setError('Please upload an image to analyze.');
-            return;
+  const handleEdit = async () => {
+    if (!file) return;
+    setLoading(true);
+    setResultImg(null);
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+      const base64 = await fileToBase64(file);
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash-image',
+        contents: {
+            parts: [
+                { inlineData: { data: base64, mimeType: file.type } },
+                { text: prompt }
+            ]
         }
-        setLoading(true);
-        setError('');
-        setResponse('');
-        try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-            const base64Image = await fileToBase64(imageFile);
-            const result = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
-                contents: { parts: [
-                    { inlineData: { data: base64Image, mimeType: imageFile.type } },
-                    { text: prompt }
-                ]}
-            });
-            setResponse(result.text);
-        } catch (err) {
-            console.error(err);
-            const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-            setError(`Failed to understand image: ${errorMessage}`);
-        } finally {
-            setLoading(false);
-        }
-    };
+      });
+      const parts = response.candidates?.[0]?.content?.parts;
+      if (parts) {
+          for (const part of parts) {
+              if (part.inlineData) {
+                  setResultImg(`data:image/png;base64,${part.inlineData.data}`);
+                  break;
+              }
+          }
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    return (
-        <div className="space-y-6">
-            <FileUploader onFileSelect={handleFileSelect} accept="image/*" label="Upload an image to analyze" />
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-                {imagePreview && <img src={imagePreview} alt="Preview" className="rounded-lg max-w-full h-auto" />}
-                <div className="space-y-4">
-                    <textarea
-                        value={prompt}
-                        onChange={(e) => setPrompt(e.target.value)}
-                        placeholder="Ask a question about the image..."
-                        className="w-full h-24 p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    />
-                    <button onClick={understandImage} disabled={loading || !imageFile} className="w-full p-3 bg-purple-600 rounded-lg font-bold hover:bg-purple-700 disabled:bg-purple-900 disabled:cursor-not-allowed">
-                        {loading ? 'Analyzing...' : 'Analyze Image'}
-                    </button>
-                </div>
+  return (
+    <div className="max-w-4xl mx-auto space-y-6">
+      <Card className="p-6">
+        <Label>Source Image</Label>
+        <FileUploader accept="image/*" onFileSelect={(f) => { setFile(f); setPreview(URL.createObjectURL(f)); }} previewUrl={preview} />
+        {mode !== 'remove-bg' && (
+          <div className="mt-4">
+            <Label>Edit Instruction</Label>
+            <TextArea value={prompt} onChange={e => setPrompt(e.target.value)} placeholder="e.g. Add a red hat to the cat" />
+          </div>
+        )}
+        <Button onClick={handleEdit} disabled={!file || loading} className="w-full mt-4">
+          {loading ? 'Processing...' : mode === 'remove-bg' ? 'Remove Background' : 'Apply Edit'}
+        </Button>
+      </Card>
+      {resultImg && (
+        <Card className="p-6">
+            <Label>Result</Label>
+            <img src={resultImg} alt="Edited" className="w-full h-auto rounded-lg" />
+            <div className="mt-4 text-right">
+                <a href={resultImg} download="edited-image.png" className="text-purple-400 hover:text-white underline">Download Image</a>
             </div>
-
-            {loading && <div className="flex justify-center pt-4"><Spinner message="Thinking..." /></div>}
-            {error && <p className="text-red-400 text-center mt-4">{error}</p>}
-            {response && (
-                <div className="mt-6 p-4 bg-gray-800 rounded-lg">
-                    <h3 className="text-xl font-bold mb-2">Analysis Result</h3>
-                    <p className="text-gray-300 whitespace-pre-wrap">{response}</p>
-                </div>
-            )}
-        </div>
-    );
+        </Card>
+      )}
+    </div>
+  );
 };
 
-// --- YouTube Thumbnail Component ---
-const YouTubeThumbnail: React.FC = () => {
-    const [imageFile, setImageFile] = useState<File | null>(null);
-    const [imagePreview, setImagePreview] = useState<string>('');
-    const [title, setTitle] = useState<string>('');
-    const [subtitle, setSubtitle] = useState<string>('');
-    const [textStyle, setTextStyle] = useState<string>('Bold & Punchy');
-    const [textColor, setTextColor] = useState<string>('High Contrast (Bright Yellow/White)');
-    const [generatedThumbnail, setGeneratedThumbnail] = useState<string>('');
-    const [loading, setLoading] = useState<boolean>(false);
-    const [error, setError] = useState<string>('');
-    
-    const textStyleOptions = ['Bold & Punchy', 'Elegant & Clean', 'Modern & Minimalist', 'Fun & Playful', 'Horror & Gritty'];
+// 6. Grounded Search Tools
+const GroundedSearchTool: React.FC<{ type: 'search' | 'trends' | 'keywords' | 'web-analysis' | 'scraping' }> = ({ type }) => {
+  const [query, setQuery] = useState('');
+  const [result, setResult] = useState('');
+  const [sources, setSources] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
 
-    const handleFileSelect = (file: File) => {
-        setImageFile(file);
-        setGeneratedThumbnail('');
-        setError('');
-        const reader = new FileReader();
-        reader.onloadend = () => setImagePreview(reader.result as string);
-        reader.readAsDataURL(file);
-    };
+  const handleSearch = async () => {
+    setLoading(true);
+    setResult('');
+    setSources([]);
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+      let finalPrompt = query;
+      if (type === 'trends') finalPrompt = `What are the current global trending topics in ${query || 'general news'}? Provide a list with context.`;
+      if (type === 'keywords') finalPrompt = `Research keywords related to: "${query}". Provide volume estimates (low/med/high) and difficulty.`;
+      if (type === 'web-analysis') finalPrompt = `Analyze this website/topic: "${query}". Provide SEO insights, performance notes, and content summary.`;
+      if (type === 'scraping') finalPrompt = `Extract structured data (contact info, key points) from this url/topic: "${query}".`;
 
-    const generateThumbnail = async () => {
-        if (!imageFile || !title) {
-            setError('Please upload a background image and provide a title.');
-            return;
-        }
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: finalPrompt,
+        config: { tools: [{ googleSearch: {} }] }
+      });
+
+      setResult(response.text || '');
+      const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
+      if (chunks) {
+        setSources(chunks.map((c: any) => c.web).filter((w: any) => w));
+      }
+    } catch (e) {
+      console.error(e);
+      setResult('Failed to fetch results.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="max-w-4xl mx-auto space-y-6">
+      <Card className="p-6">
+        <Label>{type === 'search' ? 'Search Query' : type === 'trends' ? 'Category (Optional)' : type === 'keywords' ? 'Seed Keyword' : 'URL or Topic'}</Label>
+        <div className="flex gap-2">
+            <Input value={query} onChange={e => setQuery(e.target.value)} placeholder="Enter your query..." />
+            <Button onClick={handleSearch} disabled={loading}>{loading ? 'Searching...' : 'Go'}</Button>
+        </div>
+      </Card>
+      {result && (
+        <Card className="p-6 bg-gray-800/80">
+           <div className="prose prose-invert max-w-none mb-6">{result}</div>
+           {sources.length > 0 && (
+             <div className="border-t border-gray-700 pt-4">
+               <Label>Sources</Label>
+               <ul className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                 {sources.map((src, i) => (
+                   <li key={i}><a href={src.uri} target="_blank" rel="noreferrer" className="text-blue-400 hover:underline text-sm truncate block">{src.title}</a></li>
+                 ))}
+               </ul>
+             </div>
+           )}
+        </Card>
+      )}
+    </div>
+  );
+};
+
+// 7. Blog Post Generator
+const BlogPostGeneratorTool: React.FC = () => {
+    const [topic, setTopic] = useState('');
+    const [keywords, setKeywords] = useState('');
+    const [tone, setTone] = useState('Professional');
+    const [loading, setLoading] = useState(false);
+    const [blogPost, setBlogPost] = useState('');
+    const [copySuccess, setCopySuccess] = useState(false);
+
+    const tones = ['Professional', 'Conversational', 'Creative', 'Humorous', 'Informative', 'Inspirational', 'Technical'];
+
+    const handleGenerate = async () => {
+        if (!topic) return;
         setLoading(true);
-        setError('');
-        setGeneratedThumbnail('');
+        setBlogPost('');
+        setCopySuccess(false);
+
         try {
             const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-            const base64Image = await fileToBase64(imageFile);
+            const prompt = `As a professional with extensive knowledge of Google AdSense policies on AI-generated, thin, and low-value content, I want to monetize my website. I'm not strong in English and need guidance on writing compliant content to help Google AdSense approve my site. I'd like to invite you to help me write high-value content that will get my website approved. 
 
-            const prompt = `
-                Act as an expert graphic designer specializing in high-click-through-rate YouTube thumbnails. Your task is to transform the provided user image into a professional thumbnail.
+So I want you to write high-value content using common and simple english explaining things like a baby in primary school. 
 
-                **Follow these steps precisely:**
-                1.  **Isolate the Subject:** Identify the main subject (e.g., person, object) in the uploaded image and perfectly cut it out from its original background.
-                2.  **Generate a New Background:** Create a completely new, visually stunning background that is thematically relevant to the video's title: "${title}". The background should be dynamic, eye-catching, and make the subject pop. Avoid cluttered or distracting backgrounds. Think bold gradients, abstract lighting, or clean, graphic environments.
-                3.  **Composite the Image:** Place the isolated subject seamlessly onto the newly generated background. Ensure the lighting on the subject matches the new environment.
-                4.  **Add Text:**
-                    - **Main Title**: "${title}"
-                    ${subtitle ? `- **Subtitle (smaller)**: "${subtitle}"` : ''}
-                    - **Text Style**: Apply a ${textStyle} style to all text.
-                    - **Text Color**: Use ${textColor} for the text. Add a strong outline or drop shadow to ensure it is perfectly readable against any background.
-                
-                **Final Output Requirements**:
-                - The final image MUST be in a 16:9 widescreen aspect ratio.
-                - The composition must be professional, with a clear focal point.
-                - Text must be large, bold, and instantly readable.
-                - The overall aesthetic should be vibrant and designed to grab a viewer's attention immediately.
-            `;
-            
-            const response = await ai.models.generateContent({
-                model: 'gemini-2.5-flash-image',
-                contents: {
-                    parts: [
-                        { inlineData: { data: base64Image, mimeType: imageFile.type } },
-                        { text: prompt },
-                    ],
-                },
+I will provide a blog title and potentially some draft content or keywords. Kindly help me examine it and rewrite it (or generate it if only a title is provided), ensuring it is between 600 to 800 words and in compliance with AdSense policy. The article should give Google a signal of trust.
+
+Blog Title: ${topic}
+Draft Content/Keywords: ${keywords || 'None specified'}
+Tone of voice: ${tone}
+
+Requirements:
+- Length: 600-800 words.
+- E-E-A-T: Must demonstrate Experience, Expertise, Authoritativeness, and Trustworthiness.
+- Structure: Catchy title, engaging introduction, subheadings (H2, H3), and a strong conclusion with a call to action.
+- Language: Simple English, easy to understand.
+- Policy: Strict compliance with Google AdSense policies regarding high-value content.
+
+CRITICAL INSTRUCTION: Output ONLY the blog post content itself. Do not include any introductory text, meta-commentary, or mention these instructions in the final output. The output should start directly with the blog title.
+
+Ensure the content is original, informative, and flows naturally. Do not use generic AI filler phrases.`;
+
+            const res = await ai.models.generateContent({
+                model: 'gemini-3-flash-preview',
+                contents: prompt,
                 config: {
-                    responseModalities: [Modality.IMAGE],
-                },
+                    temperature: 0.8,
+                    topP: 0.95,
+                }
             });
 
-            const imagePart = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-            if (imagePart?.inlineData) {
-                setGeneratedThumbnail(`data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`);
-            } else {
-                const textResponse = response.text;
-                if (textResponse) {
-                     throw new Error(`Model returned a text response: ${textResponse}`);
-                } else {
-                     throw new Error('Model did not return a thumbnail image.');
-                }
-            }
-        } catch (err) {
-            console.error(err);
-            setError(`Failed to generate thumbnail: ${err instanceof Error ? err.message : 'Unknown error'}`);
+            setBlogPost(res.text || 'Failed to generate content.');
+        } catch (e) {
+            console.error(e);
+            alert("Failed to generate blog post. Please try again.");
         } finally {
             setLoading(false);
         }
     };
-    
+
+    const copyToClipboard = () => {
+        navigator.clipboard.writeText(blogPost);
+        setCopySuccess(true);
+        setTimeout(() => setCopySuccess(false), 2000);
+    };
+
     return (
-        <div className="space-y-6">
-            <p className="text-gray-400">Creates professional 16:9 thumbnails by automatically replacing the background with an AI-generated, eye-catching design and adding custom text.</p>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-                {/* Left Column: Inputs */}
-                <div className="space-y-4">
-                    <h3 className="text-lg font-semibold text-gray-300">1. Upload Subject Image</h3>
-                    <FileUploader onFileSelect={handleFileSelect} accept="image/*" label="Click to upload main subject" />
-                    
-                    <h3 className="text-lg font-semibold text-gray-300 pt-2">2. Customize Text</h3>
-                     <input
-                        type="text"
-                        value={title}
-                        onChange={(e) => setTitle(e.target.value)}
-                        placeholder="Main Title (e.g., 'My Craziest Adventure!')"
-                        className="w-full p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    />
-                     <input
-                        type="text"
-                        value={subtitle}
-                        onChange={(e) => setSubtitle(e.target.value)}
-                        placeholder="Subtitle (optional, e.g., 'You Won't Believe This')"
-                        className="w-full p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    />
-                    <select
-                        value={textStyle}
-                        onChange={(e) => setTextStyle(e.target.value)}
-                        className="w-full p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    >
-                        {textStyleOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                    </select>
-                     <input
-                        type="text"
-                        value={textColor}
-                        onChange={(e) => setTextColor(e.target.value)}
-                        placeholder="Text Color (e.g., 'Bright Yellow with Black Outline')"
-                        className="w-full p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    />
-                    <button onClick={generateThumbnail} disabled={loading || !imageFile || !title} className="w-full p-3 bg-purple-600 rounded-lg font-bold hover:bg-purple-700 disabled:bg-purple-900 disabled:cursor-not-allowed">
-                       {loading ? 'Generating...' : '3. Generate Thumbnail'}
-                    </button>
-                </div>
-
-                {/* Right Column: Previews */}
-                 <div className="space-y-4">
-                    <div className="space-y-2">
-                        <h3 className="text-lg font-semibold text-center text-gray-300">Original Subject</h3>
-                        <div className="w-full aspect-video bg-gray-800 rounded-lg flex items-center justify-center text-gray-500 border border-dashed border-gray-600">
-                            {imagePreview ? <img src={imagePreview} alt="Original preview" className="max-w-full max-h-full" /> : <p>Original appears here</p>}
+        <div className="max-w-5xl mx-auto space-y-6">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <Card className="lg:col-span-1 p-6 space-y-5 h-fit">
+                    <div className="space-y-4">
+                        <div>
+                            <Label>Blog Topic / Title</Label>
+                            <Input 
+                                value={topic} 
+                                onChange={e => setTopic(e.target.value)} 
+                                placeholder="e.g. The Future of AI in Education"
+                            />
+                        </div>
+                        <div>
+                            <Label>Keywords or Draft Content (Optional)</Label>
+                            <TextArea 
+                                value={keywords} 
+                                onChange={e => setKeywords(e.target.value)} 
+                                placeholder="Paste your draft here or enter keywords to guide the AI..."
+                                rows={5}
+                            />
+                        </div>
+                        <div>
+                            <Label>Tone of Voice</Label>
+                            <select 
+                                value={tone} 
+                                onChange={e => setTone(e.target.value)}
+                                className="w-full bg-gray-900 border border-gray-700 rounded-lg p-3 text-white outline-none focus:ring-2 focus:ring-purple-500"
+                            >
+                                {tones.map(t => <option key={t} value={t}>{t}</option>)}
+                            </select>
                         </div>
                     </div>
-                     <div className="space-y-2">
-                        <h3 className="text-lg font-semibold text-center text-gray-300">Generated Thumbnail</h3>
-                        <div className="w-full aspect-video bg-gray-800 rounded-lg flex items-center justify-center text-gray-500 border border-dashed border-gray-600">
-                             {loading && <Spinner />}
-                             {!loading && error && <p className="text-red-400 p-2 text-center">{error}</p>}
-                             {!loading && !error && generatedThumbnail && <img src={generatedThumbnail} alt="Generated thumbnail" className="max-w-full max-h-full" />}
-                             {!loading && !error && !generatedThumbnail && <p>Result appears here</p>}
+                    <Button 
+                        onClick={handleGenerate} 
+                        disabled={loading || !topic} 
+                        className="w-full"
+                    >
+                        {loading ? 'Crafting Your Post...' : 'Generate Blog Post'}
+                    </Button>
+                </Card>
+
+                <div className="lg:col-span-2 space-y-6">
+                    {loading && (
+                        <Card className="p-12 flex flex-col items-center justify-center">
+                            <Spinner message="Our AI writer is researching and drafting your 800-word masterpiece..." />
+                        </Card>
+                    )}
+
+                    {!loading && blogPost && (
+                        <Card className="p-8 bg-gray-900/40 border-purple-500/20 animate-fade-in relative group">
+                            <button 
+                                onClick={copyToClipboard}
+                                className="absolute top-4 right-4 p-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-gray-400 hover:text-white transition-all border border-gray-700"
+                                title="Copy to clipboard"
+                            >
+                                {copySuccess ? (
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-green-500" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                    </svg>
+                                ) : (
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m-3 8h3m-3 4h3m-6-4h.01M9 16h.01" />
+                                    </svg>
+                                )}
+                            </button>
+                            <div className="prose prose-invert max-w-none">
+                                <div className="whitespace-pre-wrap text-gray-300 leading-relaxed font-sans text-lg">
+                                    {blogPost}
+                                </div>
+                            </div>
+                        </Card>
+                    )}
+
+                    {!loading && !blogPost && (
+                        <div className="h-full min-h-[400px] border-2 border-dashed border-gray-800 rounded-3xl flex flex-col items-center justify-center text-gray-600 p-10 text-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 mb-4 opacity-20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
+                            <h3 className="text-xl font-medium text-gray-500">Ready to Write</h3>
+                            <p className="max-w-xs mt-2">Enter a topic and select a tone to generate a high-quality blog post.</p>
                         </div>
-                        {!loading && generatedThumbnail && (
-                             <a href={generatedThumbnail} download="youtube-thumbnail.png" className="w-full text-center inline-block px-6 py-3 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700">
-                                Download Thumbnail
-                            </a>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// 8. Blog Title Generator
+const BlogTitleGeneratorTool: React.FC = () => {
+    const [topic, setTopic] = useState('');
+    const [keywords, setKeywords] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [titles, setTitles] = useState<string[]>([]);
+
+    const handleGenerate = async () => {
+        if (!topic) return;
+        setLoading(true);
+        setTitles([]);
+
+        try {
+            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+            const prompt = `Generate 10 catchy, SEO-friendly blog titles for the topic: "${topic}".
+            
+            Keywords to include: ${keywords || 'None specified'}
+            
+            Requirements:
+            - Titles should be engaging and drive clicks (click-through rate optimization).
+            - Include a mix of styles: How-to, Listicle, Question, and Benefit-driven.
+            - Keep them under 60 characters for optimal search engine display.
+            - Ensure they are relevant to the topic and keywords.
+            
+            Return the titles as a simple list, one per line. Do not include numbers at the beginning.`;
+
+            const res = await ai.models.generateContent({
+                model: 'gemini-3-flash-preview',
+                contents: prompt,
+                config: {
+                    temperature: 0.7,
+                    topP: 0.95,
+                }
+            });
+
+            const generatedTitles = res.text?.split('\n').filter(t => t.trim().length > 0).map(t => t.replace(/^\d+\.\s*/, '').trim()) || [];
+            setTitles(generatedTitles);
+        } catch (e) {
+            console.error(e);
+            alert("Failed to generate titles. Please try again.");
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const copyToClipboard = (text: string) => {
+        navigator.clipboard.writeText(text);
+    };
+
+    return (
+        <div className="max-w-4xl mx-auto space-y-6">
+            <Card className="p-6 space-y-5">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="space-y-4">
+                        <div>
+                            <Label>Main Topic</Label>
+                            <Input 
+                                value={topic} 
+                                onChange={e => setTopic(e.target.value)} 
+                                placeholder="e.g. Digital Marketing, Healthy Eating"
+                            />
+                        </div>
+                        <div>
+                            <Label>Target Keywords (Optional)</Label>
+                            <Input 
+                                value={keywords} 
+                                onChange={e => setKeywords(e.target.value)} 
+                                placeholder="e.g. beginners, 2024 trends, guide"
+                            />
+                        </div>
+                        <Button 
+                            onClick={handleGenerate} 
+                            disabled={loading || !topic} 
+                            className="w-full"
+                        >
+                            {loading ? 'Generating...' : 'Generate SEO Titles'}
+                        </Button>
+                    </div>
+                    <div className="bg-gray-900/50 rounded-xl border border-gray-700 p-4 min-h-[200px]">
+                        <h3 className="text-sm font-semibold text-gray-400 mb-4 uppercase tracking-wider">Generated Titles</h3>
+                        {loading ? (
+                            <div className="flex justify-center items-center h-32">
+                                <Spinner />
+                            </div>
+                        ) : titles.length > 0 ? (
+                            <ul className="space-y-3">
+                                {titles.map((title, i) => (
+                                    <li key={i} className="flex items-center justify-between gap-4 p-3 bg-gray-800/50 rounded-lg border border-gray-700 hover:border-purple-500/50 transition-all group">
+                                        <span className="text-gray-200 text-sm font-medium leading-tight">{title}</span>
+                                        <button 
+                                            onClick={() => copyToClipboard(title)}
+                                            className="p-1.5 text-gray-500 hover:text-purple-400 transition-colors"
+                                            title="Copy title"
+                                        >
+                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m-3 8h3m-3 4h3m-6-4h.01M9 16h.01" />
+                                            </svg>
+                                        </button>
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : (
+                            <div className="flex flex-col items-center justify-center h-32 text-gray-600 italic text-sm">
+                                <p>Titles will appear here...</p>
+                            </div>
                         )}
                     </div>
                 </div>
-            </div>
+            </Card>
         </div>
     );
 };
 
-// --- Video Generation Component ---
-const VideoGeneration: React.FC = () => {
-    const [prompt, setPrompt] = useState('');
-    const [imageFile, setImageFile] = useState<File | null>(null);
-    const [imagePreview, setImagePreview] = useState<string>('');
-    const [aspectRatio, setAspectRatio] = useState<VideoAspectRatio>('16:9');
-    const [videoUrl, setVideoUrl] = useState('');
+// 9. Generic Text Tools
+const GenericTextTool: React.FC<{ toolId: string }> = ({ toolId }) => {
+    const [input, setInput] = useState('');
+    const [output, setOutput] = useState('');
     const [loading, setLoading] = useState(false);
-    const [loadingMessage, setLoadingMessage] = useState('');
-    const [error, setError] = useState('');
-    const [apiKeySelected, setApiKeySelected] = useState(true);
 
-    const checkApiKey = useCallback(async () => {
-        if (window.aistudio?.hasSelectedApiKey) {
-            const hasKey = await window.aistudio.hasSelectedApiKey();
-            setApiKeySelected(hasKey);
-            return hasKey;
-        }
-        return true;
-    }, []);
-
-    useEffect(() => {
-        checkApiKey();
-    }, [checkApiKey]);
-
-    const handleSelectKey = async () => {
-        if (window.aistudio?.openSelectKey) {
-            await window.aistudio.openSelectKey();
-            setApiKeySelected(true);
-        }
-    };
-
-    const handleFileSelect = (file: File) => {
-        setImageFile(file);
-        const reader = new FileReader();
-        reader.onloadend = () => setImagePreview(reader.result as string);
-        reader.readAsDataURL(file);
-    };
-
-    const generateVideo = async () => {
-        if (!prompt && !imageFile) {
-            setError('Please provide a prompt or an image.');
-            return;
-        }
-        const hasKey = await checkApiKey();
-        if (!hasKey) return;
-
+    const handleRun = async () => {
         setLoading(true);
-        setError('');
-        setVideoUrl('');
-        setLoadingMessage('Initializing video generation...');
-
         try {
             const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-            const base64Image = imageFile ? await fileToBase64(imageFile) : undefined;
+            let model = 'gemini-3-flash-preview';
+            let systemInstruction = '';
+            let config: any = {};
 
-            let operation: VideosOperation = await ai.models.generateVideos({
-                model: 'veo-3.1-fast-generate-preview',
-                prompt,
-                ...(base64Image && imageFile && { image: { imageBytes: base64Image, mimeType: imageFile.type } }),
+            if (toolId === Tool.EmailMarketing) systemInstruction = "You are an expert email marketer. Generate professional, high-converting email copy.";
+            if (toolId === Tool.AddressGeneration) systemInstruction = "Generate realistic fake addresses.";
+            if (toolId === Tool.ThinkingMode) {
+                model = 'gemini-3-pro-preview'; 
+                config = { thinkingConfig: { thinkingBudget: 32768 } }; 
+                systemInstruction = "Solve this complex problem step-by-step.";
+            }
+            if (toolId === Tool.LowLatency) model = 'gemini-flash-lite-latest';
+
+            const res = await ai.models.generateContent({
+                model,
+                contents: input,
+                config: { ...config, systemInstruction }
+            });
+            setOutput(res.text || '');
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div className="max-w-4xl mx-auto space-y-6">
+            <Card className="p-6">
+                <Label>Input / Prompt</Label>
+                <TextArea value={input} onChange={e => setInput(e.target.value)} rows={5} />
+                <Button onClick={handleRun} disabled={loading || !input} className="w-full mt-4">
+                    {loading ? 'Generating...' : 'Generate'}
+                </Button>
+            </Card>
+            {output && (
+                <Card className="p-6">
+                    <Label>Output</Label>
+                    <div className="whitespace-pre-wrap text-gray-300">{output}</div>
+                </Card>
+            )}
+        </div>
+    );
+};
+
+// 8. Live Conversation
+const LiveConversationTool: React.FC = () => {
+    const [connected, setConnected] = useState(false);
+    const [logs, setLogs] = useState<string[]>([]);
+    const sessionRef = useRef<any>(null);
+    
+    const startSession = async () => {
+        setConnected(true);
+        setLogs(p => [...p, "Initializing audio context..."]);
+        
+        try {
+            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+            const inputAudioContext = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 16000});
+            const outputAudioContext = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 24000});
+            const outputNode = outputAudioContext.createGain();
+            outputNode.connect(outputAudioContext.destination);
+
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            let nextStartTime = 0;
+            
+            const sessionPromise = ai.live.connect({
+                model: 'gemini-2.5-flash-native-audio-preview-12-2025',
                 config: {
-                    numberOfVideos: 1,
-                    resolution: '720p',
-                    aspectRatio: aspectRatio,
+                    responseModalities: [Modality.AUDIO],
+                    speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } } }
+                },
+                callbacks: {
+                    onopen: () => {
+                        setLogs(p => [...p, "Connected! Speak now."]);
+                        const source = inputAudioContext.createMediaStreamSource(stream);
+                        const processor = inputAudioContext.createScriptProcessor(4096, 1, 1);
+                        processor.onaudioprocess = (e) => {
+                             const inputData = e.inputBuffer.getChannelData(0);
+                             const blob = createAudioBlob(inputData);
+                             sessionPromise.then(sess => sess.sendRealtimeInput({ media: blob }));
+                        };
+                        source.connect(processor);
+                        processor.connect(inputAudioContext.destination);
+                    },
+                    onmessage: async (msg: LiveServerMessage) => {
+                        const data = msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
+                        if (data) {
+                            nextStartTime = Math.max(nextStartTime, outputAudioContext.currentTime);
+                            const buffer = await decodeAudioData(decode(data), outputAudioContext, 24000, 1);
+                            const source = outputAudioContext.createBufferSource();
+                            source.buffer = buffer;
+                            source.connect(outputNode);
+                            source.start(nextStartTime);
+                            nextStartTime += buffer.duration;
+                        }
+                    },
+                    onclose: () => {
+                        setLogs(p => [...p, "Session closed."]);
+                        setConnected(false);
+                    }
                 }
             });
 
-            setLoadingMessage('Generating video... This may take a few minutes.');
-            while (!operation.done) {
-                await new Promise(resolve => setTimeout(resolve, 10000));
-                operation = await ai.operations.getVideosOperation({ operation: operation });
-            }
+            sessionPromise.then(sess => { sessionRef.current = sess; });
 
-            const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-            if (downloadLink) {
-                const response = await fetch(`${downloadLink}&key=${process.env.API_KEY}`);
-                const blob = await response.blob();
-                setVideoUrl(URL.createObjectURL(blob));
-            } else {
-                throw new Error('Video generation did not return a valid video URI.');
-            }
-        } catch (err) {
-            console.error(err);
-            const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-            if (errorMessage.includes("Requested entity was not found")) {
-                setError("API Key error. Please select a valid API key and try again.");
-                setApiKeySelected(false);
-            } else {
-                setError(`Failed to generate video: ${errorMessage}`);
-            }
-        } finally {
-            setLoading(false);
-            setLoadingMessage('');
+        } catch (e) {
+            setLogs(p => [...p, `Error: ${(e as Error).message}`]);
+            setConnected(false);
         }
     };
 
+    const stopSession = () => {
+      if (sessionRef.current) {
+        sessionRef.current.close();
+        sessionRef.current = null;
+      }
+      setConnected(false);
+    };
+
     return (
-        <div className="space-y-6">
-            <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Enter a prompt for your video..." className="w-full h-24 p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"/>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
-                <FileUploader onFileSelect={handleFileSelect} accept="image/*" label="Upload a starting image (optional)" />
+        <div className="max-w-2xl mx-auto">
+            <Card className="p-8 text-center space-y-6">
+                <div className={`w-32 h-32 rounded-full mx-auto flex items-center justify-center transition-all ${connected ? 'bg-red-500/20 shadow-[0_0_50px_rgba(239,68,68,0.5)]' : 'bg-gray-800'}`}>
+                    <svg xmlns="http://www.w3.org/2000/svg" className={`h-16 w-16 ${connected ? 'text-red-500 animate-pulse' : 'text-gray-500'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg>
+                </div>
                 <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-1">Aspect Ratio</label>
-                    <select value={aspectRatio} onChange={(e) => setAspectRatio(e.target.value as VideoAspectRatio)} className="w-full p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500">
-                        <option value="16:9">16:9 (Landscape)</option>
-                        <option value="9:16">9:16 (Portrait / Shorts)</option>
-                    </select>
+                    <h3 className="text-xl font-bold">{connected ? 'Live Session Active' : 'Start Live Conversation'}</h3>
+                    <p className="text-gray-400 mt-2">Speak naturally with Gemini with low latency.</p>
                 </div>
-            </div>
-            {imagePreview && <img src={imagePreview} alt="Preview" className="rounded-lg max-w-sm mx-auto" />}
-            
-            {!apiKeySelected ? (
-                <div className="text-center p-4 bg-yellow-900/50 rounded-lg">
-                    <p className="mb-2 text-yellow-300">An API key is required for video generation.</p>
-                    <button onClick={handleSelectKey} className="px-4 py-2 bg-yellow-600 hover:bg-yellow-700 rounded-lg font-bold">Select API Key</button>
-                    <p className="text-xs mt-2 text-gray-400">For more information, see the <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="underline">billing documentation</a>.</p>
-                </div>
-            ) : (
-                <button onClick={generateVideo} disabled={loading} className="w-full p-3 bg-purple-600 rounded-lg font-bold hover:bg-purple-700 disabled:bg-purple-900 disabled:cursor-not-allowed">
-                    {loading ? 'Generating...' : 'Generate Video'}
-                </button>
-            )}
-
-            {loading && <div className="flex justify-center"><Spinner message={loadingMessage} /></div>}
-            {error && <p className="text-red-400 text-center">{error}</p>}
-            
-            {videoUrl && (
-                <div className="text-center">
-                    <h3 className="text-xl font-bold mb-2">Generated Video</h3>
-                    <video src={videoUrl} controls autoPlay loop className="rounded-lg mx-auto max-w-full" />
-                    <a href={videoUrl} download="generated-video.mp4" className="mt-4 inline-block px-6 py-2 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700">Download Video</a>
-                </div>
-            )}
-        </div>
-    );
-};
-
-// --- Video Understanding Component ---
-const VideoUnderstanding: React.FC = () => {
-    const [url, setUrl] = useState('');
-    const [prompt, setPrompt] = useState('');
-    const [loading, setLoading] = useState(false);
-    const [response, setResponse] = useState<GenerateContentCandidate | null>(null);
-    const [error, setError] = useState('');
-
-    const handleAnalyze = async () => {
-        if (!url || !prompt) {
-             setError('Please provide a video URL and a question.');
-            return;
-        }
-        setLoading(true);
-        setError('');
-        setResponse(null);
-        try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-            const fullPrompt = `Analyze the video found at this URL: ${url}. Use your search capabilities to find information, summaries, or transcripts related to this video. Based on what you find, please answer the following question: "${prompt}"`;
-            const result = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
-                contents: fullPrompt,
-                config: { tools: [{ googleSearch: {} }] },
-            });
-            setResponse(result.candidates?.[0] || null);
-        } catch (err) {
-            console.error(err);
-            setError(`Analysis failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
-        } finally {
-            setLoading(false);
-        }
-    };
-    
-    return (
-        <div className="space-y-4">
-            <p className="text-gray-400">Note: This tool uses Google Search to find information about the public video at the given URL. It does not directly process the video file.</p>
-            <input type="url" value={url} onChange={e => setUrl(e.target.value)} placeholder="Enter a public video URL (e.g., YouTube)" className="w-full p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" />
-            <textarea value={prompt} onChange={e => setPrompt(e.target.value)} placeholder="Ask a question about the video..." className="w-full h-24 p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" />
-            <button onClick={handleAnalyze} disabled={loading} className="w-full p-3 bg-purple-600 rounded-lg font-bold hover:bg-purple-700 disabled:bg-purple-900">
-                {loading ? 'Analyzing...' : 'Analyze Video'}
-            </button>
-            {loading && <div className="flex justify-center pt-4"><Spinner message="Researching video..." /></div>}
-            {error && <p className="text-red-400 text-center">{error}</p>}
-            {response && (
-                <div className="p-4 bg-gray-800 rounded-lg space-y-4 animate-fade-in">
-                    <div className="prose prose-invert max-w-none text-gray-300 whitespace-pre-wrap">
-                        {response.content.parts[0].text}
+                {!connected ? (
+                    <Button onClick={startSession} className="w-full">Connect & Speak</Button>
+                ) : (
+                    <div className="space-y-4">
+                      <div className="bg-black/50 p-4 rounded-lg h-32 overflow-y-auto text-left text-xs font-mono text-green-400">
+                          {logs.map((l, i) => <div key={i}>{l}</div>)}
+                      </div>
+                      <Button onClick={stopSession} className="w-full from-red-600 to-red-800 hover:from-red-500 hover:to-red-700">End Session</Button>
                     </div>
-                </div>
-            )}
+                )}
+            </Card>
         </div>
     );
 };
 
-// --- Video Transcription Component ---
-const VideoTranscription: React.FC = () => {
-    const [url, setUrl] = useState('');
-    const [loading, setLoading] = useState(false);
-    const [response, setResponse] = useState('');
-    const [error, setError] = useState('');
-
-    const handleTranscribe = async () => {
-        if (!url) {
-             setError('Please provide a video URL.');
-            return;
-        }
-        setLoading(true);
-        setError('');
-        setResponse('');
-        try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-            const result = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
-                contents: `Please find and provide a full transcript for the video located at the following URL: ${url}. If a direct transcript is unavailable, summarize the video's spoken content.`,
-                config: { tools: [{ googleSearch: {} }] },
-            });
-            setResponse(result.text);
-        } catch (err) {
-            console.error(err);
-            setError(`Transcription failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
-        } finally {
-            setLoading(false);
-        }
-    };
-    
-    return (
-        <div className="space-y-4">
-            <p className="text-gray-400">Enter the URL of a public video (e.g., from YouTube) to search for its transcript online.</p>
-            <div className="flex gap-4">
-                <input type="url" value={url} onChange={e => setUrl(e.target.value)} placeholder="Enter a public video URL" className="flex-grow p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" />
-                <button onClick={handleTranscribe} disabled={loading} className="p-3 bg-purple-600 rounded-lg font-bold hover:bg-purple-700 disabled:bg-purple-900">
-                    {loading ? 'Transcribing...' : 'Get Transcript'}
-                </button>
-            </div>
-            {loading && <div className="flex justify-center pt-4"><Spinner message="Searching for transcript..." /></div>}
-            {error && <p className="text-red-400 text-center">{error}</p>}
-            {response && (
-                <div className="p-4 bg-gray-800 rounded-lg space-y-4 animate-fade-in max-h-96 overflow-y-auto">
-                     <h3 className="text-lg font-semibold text-gray-200">Transcript / Summary:</h3>
-                     <pre className="text-gray-300 whitespace-pre-wrap font-sans">{response}</pre>
-                </div>
-            )}
-        </div>
-    );
-};
-
-
-// --- Grounded Search Component ---
-const GroundedSearch: React.FC = () => {
-    const [query, setQuery] = useState('');
-    const [loading, setLoading] = useState(false);
-    const [response, setResponse] = useState<GenerateContentCandidate | null>(null);
-    const [error, setError] = useState('');
-
-    const handleSearch = async () => {
-        if (!query) return;
-        setLoading(true);
-        setError('');
-        setResponse(null);
-        try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-            const result = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
-                contents: query,
-                config: { tools: [{ googleSearch: {} }] },
-            });
-            setResponse(result.candidates?.[0] || null);
-        } catch (err) {
-            console.error(err);
-            setError(`Search failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const renderGroundingChunk = (chunk: GroundingChunk, index: number) => {
-        if (chunk.web) {
-            return (
-                 <a href={chunk.web.uri} target="_blank" rel="noopener noreferrer" className="block text-sm text-blue-400 hover:underline" title={chunk.web.title}>
-                    [{index + 1}] {chunk.web.title || new URL(chunk.web.uri).hostname}
-                </a>
-            );
-        }
-        return null;
-    };
-
-    return (
-        <div className="space-y-4">
-            <div className="flex">
-                <input
-                    type="text"
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
-                    placeholder="Ask a question about recent events or topics..."
-                    className="flex-1 p-3 bg-gray-700 rounded-l-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-                />
-                <button onClick={handleSearch} disabled={loading} className="p-3 bg-purple-600 rounded-r-lg hover:bg-purple-700 disabled:bg-purple-900">
-                    {loading ? <Spinner /> : 'Search'}
-                </button>
-            </div>
-
-            {loading && <div className="flex justify-center pt-4"><Spinner message="Searching the web..." /></div>}
-            {error && <p className="text-red-400 text-center">{error}</p>}
-            
-            {response && (
-                <div className="p-4 bg-gray-800 rounded-lg space-y-4 animate-fade-in">
-                    <div className="prose prose-invert max-w-none text-gray-300 whitespace-pre-wrap">
-                        {response.content.parts[0].text}
-                    </div>
-                    {response.groundingMetadata?.groundingChunks && response.groundingMetadata.groundingChunks.length > 0 && (
-                        <div>
-                            <h3 className="text-lg font-semibold mb-2 text-gray-200">Sources:</h3>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                {response.groundingMetadata.groundingChunks.map(renderGroundingChunk)}
-                            </div>
-                        </div>
-                    )}
-                </div>
-            )}
-        </div>
-    );
-};
-
-// --- Thinking Mode Component ---
-const ThinkingMode: React.FC = () => {
-    const [prompt, setPrompt] = useState('');
-    const [response, setResponse] = useState('');
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState('');
-    const [thinkingBudget, setThinkingBudget] = useState(8192);
-
-    const handleSubmit = async () => {
-        if (!prompt) return;
-        setLoading(true);
-        setError('');
-        setResponse('');
-        try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-            const result = await ai.models.generateContent({
-                model: 'gemini-2.5-pro',
-                contents: prompt,
-                config: { thinkingConfig: { thinkingBudget: thinkingBudget } }
-            });
-            setResponse(result.text);
-        } catch (err) {
-            console.error(err);
-            setError(`Request failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
-        } finally {
-            setLoading(false);
-        }
-    };
-    
-    return (
-         <div className="space-y-4">
-            <textarea
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                placeholder="Enter a complex problem or a multi-step request..."
-                className="w-full h-32 p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-            />
-            <div className="flex flex-col md:flex-row gap-4 items-center">
-                <div className="flex-grow w-full">
-                    <label htmlFor="thinking-budget" className="block text-sm font-medium text-gray-300 mb-1">
-                        Thinking Budget: <span className="font-bold text-purple-300">{thinkingBudget} tokens</span>
-                    </label>
-                    <input
-                        id="thinking-budget"
-                        type="range"
-                        min="0"
-                        max="32768"
-                        step="1024"
-                        value={thinkingBudget}
-                        onChange={(e) => setThinkingBudget(Number(e.target.value))}
-                        className="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-purple-500"
-                    />
-                </div>
-                <button onClick={handleSubmit} disabled={loading || !prompt} className="w-full md:w-auto p-3 bg-purple-600 rounded-lg font-bold hover:bg-purple-700 disabled:bg-purple-900">
-                    {loading ? 'Thinking...' : 'Solve'}
-                </button>
-            </div>
-
-            {loading && <div className="flex justify-center pt-4"><Spinner message="Deeply considering your request..." /></div>}
-            {error && <p className="text-red-400 text-center">{error}</p>}
-
-            {response && (
-                <div className="p-4 bg-gray-800 rounded-lg space-y-4 animate-fade-in">
-                     <h3 className="text-lg font-semibold text-gray-200">Solution:</h3>
-                     <p className="text-gray-300 whitespace-pre-wrap">{response}</p>
-                </div>
-            )}
-        </div>
-    );
-};
-
-
-// --- Audio Transcription Component ---
-const AudioTranscription: React.FC = () => {
-    const [url, setUrl] = useState('');
-    const [loading, setLoading] = useState(false);
-    const [response, setResponse] = useState('');
-    const [error, setError] = useState('');
-
-    const handleTranscribe = async () => {
-        if (!url) {
-             setError('Please provide an audio URL.');
-            return;
-        }
-        setLoading(true);
-        setError('');
-        setResponse('');
-        try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-            const result = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
-                contents: `Please find and provide a full transcript for the audio content (e.g., podcast episode, interview) located at the following URL: ${url}.`,
-                config: { tools: [{ googleSearch: {} }] },
-            });
-            setResponse(result.text);
-        } catch (err) {
-            console.error(err);
-            setError(`Transcription failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
-        } finally {
-            setLoading(false);
-        }
-    };
-    
-    return (
-        <div className="space-y-4">
-            <p className="text-gray-400">Enter the URL of a public audio source (e.g., a podcast episode page) to search for its transcript online.</p>
-            <div className="flex gap-4">
-                <input type="url" value={url} onChange={e => setUrl(e.target.value)} placeholder="Enter a public audio URL" className="flex-grow p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" />
-                <button onClick={handleTranscribe} disabled={loading} className="p-3 bg-purple-600 rounded-lg font-bold hover:bg-purple-700 disabled:bg-purple-900">
-                    {loading ? 'Transcribing...' : 'Get Transcript'}
-                </button>
-            </div>
-            {loading && <div className="flex justify-center pt-4"><Spinner message="Searching for transcript..." /></div>}
-            {error && <p className="text-red-400 text-center">{error}</p>}
-            {response && (
-                <div className="p-4 bg-gray-800 rounded-lg space-y-4 animate-fade-in max-h-96 overflow-y-auto">
-                     <h3 className="text-lg font-semibold text-gray-200">Transcript:</h3>
-                     <pre className="text-gray-300 whitespace-pre-wrap font-sans">{response}</pre>
-                </div>
-            )}
-        </div>
-    );
-};
-
-// --- Text to Speech Component ---
+// 9. Text to Speech
 const TextToSpeech: React.FC = () => {
-    const [text, setText] = useState('Hello! I am Gemini, a large language model, trained by Google.');
-    const [voice, setVoice] = useState('Kore');
+    const [text, setText] = useState('');
+    const [voice, setVoice] = useState('Zephyr');
     const [loading, setLoading] = useState(false);
-    const [error, setError] = useState('');
-    const [audioUrl, setAudioUrl] = useState('');
-    const audioRef = useRef<HTMLAudioElement>(null);
+    const voices = ['Puck', 'Charon', 'Kore', 'Fenrir', 'Aoede', 'Zephyr'];
 
-    const voices = ['Kore', 'Puck', 'Charon', 'Fenrir', 'Zephyr'];
-
-    const generateSpeech = async () => {
+    const handleSpeak = async () => {
         if (!text) return;
         setLoading(true);
-        setError('');
-        setAudioUrl('');
-
         try {
             const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-            const response = await ai.models.generateContent({
-                model: "gemini-2.5-flash-preview-tts",
-                contents: [{ parts: [{ text }] }],
+            const res = await ai.models.generateContent({
+                model: 'gemini-2.5-flash-preview-tts',
+                contents: { parts: [{ text }] },
                 config: {
                     responseModalities: [Modality.AUDIO],
-                    speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
-                },
+                    speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } }
+                }
             });
-            
-            const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-            if (base64Audio) {
-                const audioBytes = decode(base64Audio);
-                const blob = new Blob([audioBytes], { type: 'audio/mpeg' }); // The browser can often play raw PCM in an mpeg container
-                const url = URL.createObjectURL(blob);
-                setAudioUrl(url);
-            } else {
-                throw new Error("API did not return audio data.");
+            const data = res.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+            if (data) {
+                const ctx = new AudioContext({ sampleRate: 24000 });
+                const buffer = await decodeAudioData(decode(data), ctx, 24000, 1);
+                const source = ctx.createBufferSource();
+                source.buffer = buffer;
+                source.connect(ctx.destination);
+                source.start();
             }
-        } catch (err) {
-            console.error(err);
-            setError(`Failed to generate speech: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        } catch (e) {
+            console.error(e);
         } finally {
             setLoading(false);
         }
     };
 
-    useEffect(() => {
-        if (audioUrl && audioRef.current) {
-            audioRef.current.play();
-        }
-    }, [audioUrl]);
-
     return (
-        <div className="space-y-6 max-w-2xl mx-auto">
-            <textarea value={text} onChange={(e) => setText(e.target.value)} className="w-full h-32 p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"/>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
-                <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-1">Voice</label>
-                    <select value={voice} onChange={(e) => setVoice(e.target.value)} className="w-full p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500">
+        <div className="max-w-4xl mx-auto">
+            <Card className="p-6 space-y-4">
+                <div className="flex flex-col gap-2">
+                    <Label>Select AI Voice</Label>
+                    <select value={voice} onChange={(e) => setVoice(e.target.value)} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-3 text-white outline-none focus:border-purple-500 cursor-pointer">
                         {voices.map(v => <option key={v} value={v}>{v}</option>)}
                     </select>
                 </div>
-                <button onClick={generateSpeech} disabled={loading || !text} className="w-full p-3 bg-purple-600 rounded-lg font-bold hover:bg-purple-700 disabled:bg-purple-900">
-                    {loading ? 'Generating...' : 'Generate Speech'}
-                </button>
-            </div>
-            {loading && <div className="flex justify-center"><Spinner message="Synthesizing audio..." /></div>}
-            {error && <p className="text-red-400 text-center">{error}</p>}
-            {audioUrl && (
-                <div className="text-center space-y-4">
-                    <h3 className="text-lg font-semibold">Generated Audio:</h3>
-                    <audio ref={audioRef} src={audioUrl} controls className="w-full" />
-                    <a href={audioUrl} download="generated-speech.mp3" className="inline-block px-6 py-2 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700">Download Audio</a>
+                <div>
+                    <Label>Text to Speak</Label>
+                    <TextArea value={text} onChange={e => setText(e.target.value)} rows={4} placeholder="Enter text that you want the AI to read aloud..." />
                 </div>
-            )}
+                <Button onClick={handleSpeak} disabled={loading || !text} className="w-full">{loading ? 'Generating Audio...' : 'Speak'}</Button>
+            </Card>
         </div>
     );
 };
 
-
-// --- Low Latency Component ---
-const LowLatency: React.FC = () => {
-    const [prompt, setPrompt] = useState('');
-    const [response, setResponse] = useState('');
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState('');
-
-    const handleSubmit = async () => {
-        if (!prompt) return;
-        setLoading(true);
-        setError('');
-        setResponse('');
-        try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-            const result = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
-                contents: prompt,
-                config: { thinkingConfig: { thinkingBudget: 0 } }
-            });
-            setResponse(result.text);
-        } catch (err) {
-            console.error(err);
-            setError(`Request failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    return (
-        <div className="space-y-4">
-            <div className="flex">
-                <input
-                    type="text"
-                    value={prompt}
-                    onChange={(e) => setPrompt(e.target.value)}
-                    onKeyPress={(e) => e.key === 'Enter' && handleSubmit()}
-                    placeholder="Ask a simple question for a fast response..."
-                    className="flex-1 p-3 bg-gray-700 rounded-l-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-                />
-                <button onClick={handleSubmit} disabled={loading || !prompt} className="p-3 bg-purple-600 rounded-r-lg hover:bg-purple-700 disabled:bg-purple-900">
-                    {loading ? <Spinner /> : 'Get Answer'}
-                </button>
-            </div>
-
-            {loading && <div className="flex justify-center pt-4"><Spinner /></div>}
-            {error && <p className="text-red-400 text-center">{error}</p>}
-
-            {response && (
-                <div className="p-4 bg-gray-800 rounded-lg animate-fade-in">
-                     <p className="text-gray-300 whitespace-pre-wrap">{response}</p>
-                </div>
-            )}
-        </div>
-    );
-};
-
-// --- Image Converter Component ---
+// 10. Image Converter
 const ImageConverter: React.FC = () => {
-    const [imageFile, setImageFile] = useState<File | null>(null);
-    const [imagePreview, setImagePreview] = useState<string>('');
-    const [targetFormat, setTargetFormat] = useState('png');
-    const [resultImage, setResultImage] = useState<string>('');
-    const [loading, setLoading] = useState<boolean>(false);
-    const [error, setError] = useState<string>('');
+    const [files, setFiles] = useState<FileList | null>(null);
+    const [format, setFormat] = useState('image/png');
+    const [canvasRef] = useState<HTMLCanvasElement>(document.createElement('canvas'));
 
-    const handleFileSelect = (file: File) => {
-        setImageFile(file);
-        setResultImage('');
-        setError('');
-        const reader = new FileReader();
-        reader.onloadend = () => setImagePreview(reader.result as string);
-        reader.readAsDataURL(file);
-    };
-
-    const handleConvert = async () => {
-        if (!imageFile) {
-            setError('Please upload an image.');
-            return;
-        }
-        setLoading(true);
-        setError('');
-        setResultImage('');
-        try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-            const base64Image = await fileToBase64(imageFile);
-            const response = await ai.models.generateContent({
-                model: 'gemini-2.5-flash-image',
-                contents: {
-                    parts: [
-                        { inlineData: { data: base64Image, mimeType: imageFile.type } },
-                        { text: `Convert this image to ${targetFormat} format.` },
-                    ],
-                },
-                config: { responseModalities: [Modality.IMAGE] },
-            });
-
-            const imagePart = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-            if (imagePart?.inlineData) {
-                setResultImage(`data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`);
-            } else {
-                 throw new Error(response.text || 'Model did not return an image.');
-            }
-        } catch (err) {
-            console.error(err);
-            setError(`Conversion failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
-        } finally {
-            setLoading(false);
-        }
-    };
-    
-    return (
-        <div className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-end">
-                 <FileUploader onFileSelect={handleFileSelect} accept="image/*" label="Upload an image" />
-                <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-1">Convert to:</label>
-                    <select value={targetFormat} onChange={e => setTargetFormat(e.target.value)} className="w-full p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500">
-                        <option value="png">PNG</option>
-                        <option value="jpeg">JPEG</option>
-                        <option value="webp">WEBP</option>
-                        <option value="svg">SVG (Experimental)</option>
-                    </select>
-                </div>
-                 <button onClick={handleConvert} disabled={loading || !imageFile} className="w-full p-3 bg-purple-600 rounded-lg font-bold hover:bg-purple-700 disabled:bg-purple-900">Convert</button>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start mt-6">
-                <div>
-                    <h3 className="text-xl font-bold text-center mb-2">Original</h3>
-                    {imagePreview ? <ZoomableImage src={imagePreview} alt="Original" /> : <div className="h-96 bg-gray-800 rounded-lg flex items-center justify-center text-gray-500">Preview</div>}
-                </div>
-                <div>
-                    <h3 className="text-xl font-bold text-center mb-2">Converted</h3>
-                    <div className="h-96 bg-gray-800 rounded-lg flex items-center justify-center">
-                        {loading && <Spinner />}
-                        {error && <p className="text-red-400 text-center">{error}</p>}
-                        {resultImage && <ZoomableImage src={resultImage} alt="Converted" />}
-                    </div>
-                     {resultImage && <a href={resultImage} download={`converted.${targetFormat}`} className="mt-2 w-full text-center inline-block px-6 py-3 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700">Download</a>}
-                </div>
-            </div>
-        </div>
-    );
-};
-
-// --- Address Generation Component ---
-const AddressGeneration: React.FC = () => {
-    type Address = { street: string; city: string; state: string; postalCode: string; country: string };
-    const [count, setCount] = useState(5);
-    const [location, setLocation] = useState('');
-    const [addresses, setAddresses] = useState<Address[]>([]);
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState('');
-    
-    const generate = async () => {
-        setLoading(true);
-        setError('');
-        setAddresses([]);
-        try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-            const response = await ai.models.generateContent({
-                model: "gemini-2.5-flash",
-                contents: `Generate ${count} realistic random addresses. ${location ? `They should be located in ${location}.` : ''}`,
-                config: {
-                    responseMimeType: "application/json",
-                    responseSchema: {
-                        type: Type.OBJECT,
-                        properties: {
-                            addresses: {
-                                type: Type.ARRAY,
-                                items: {
-                                    type: Type.OBJECT,
-                                    properties: {
-                                        street: { type: Type.STRING },
-                                        city: { type: Type.STRING },
-                                        state: { type: Type.STRING },
-                                        postalCode: { type: Type.STRING },
-                                        country: { type: Type.STRING },
-                                    },
-                                    required: ["street", "city", "state", "postalCode", "country"]
-                                }
-                            }
-                        }
-                    }
-                }
-            });
-            const parsed = JSON.parse(response.text);
-            setAddresses(parsed.addresses);
-        } catch (err) {
-            console.error(err);
-            setError(`Failed to generate addresses: ${err instanceof Error ? err.message : 'Unknown error'}`);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    return (
-        <div className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-end">
-                <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-1">Number to Generate</label>
-                    <input type="number" value={count} onChange={e => setCount(Math.max(1, Number(e.target.value)))} min="1" max="50" className="w-full p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" />
-                </div>
-                <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-1">Location (optional)</label>
-                    <input type="text" value={location} onChange={e => setLocation(e.target.value)} placeholder="e.g., California, USA or Tokyo" className="w-full p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" />
-                </div>
-                <button onClick={generate} disabled={loading} className="w-full p-3 bg-purple-600 rounded-lg font-bold hover:bg-purple-700 disabled:bg-purple-900">Generate</button>
-            </div>
-            {loading && <div className="flex justify-center"><Spinner message="Generating..." /></div>}
-            {error && <p className="text-red-400 text-center">{error}</p>}
-            {addresses.length > 0 && (
-                <div className="overflow-x-auto bg-gray-800/50 rounded-lg">
-                    <table className="w-full text-left">
-                        <thead className="bg-gray-700/50"><tr>
-                            <th className="p-3">Street</th><th className="p-3">City</th><th className="p-3">State/Province</th><th className="p-3">Postal Code</th><th className="p-3">Country</th>
-                        </tr></thead>
-                        <tbody>
-                            {addresses.map((addr, i) => (
-                                <tr key={i} className="border-b border-gray-700">
-                                    <td className="p-3">{addr.street}</td><td className="p-3">{addr.city}</td><td className="p-3">{addr.state}</td><td className="p-3">{addr.postalCode}</td><td className="p-3">{addr.country}</td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            )}
-        </div>
-    );
-};
-
-// --- Global Trending Topics Component ---
-const GlobalTrendingTopics: React.FC = () => {
-    const [category, setCategory] = useState('All');
-    const [response, setResponse] = useState('');
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState('');
-    
-    const categories = ['All', 'Technology', 'Business', 'Sports', 'Entertainment', 'Health'];
-
-    const findTrends = async () => {
-        setLoading(true);
-        setError('');
-        setResponse('');
-        try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-            const result = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
-                contents: `What are the top 5 global trending topics right now ${category !== 'All' ? `in the ${category} category` : ''}? Provide a numbered list with a brief, one-sentence explanation for why each is trending.`,
-                config: { tools: [{ googleSearch: {} }] },
-            });
-            setResponse(result.text);
-        } catch (err) {
-            console.error(err);
-            setError(`Failed to fetch trends: ${err instanceof Error ? err.message : 'Unknown error'}`);
-        } finally {
-            setLoading(false);
-        }
-    };
-    
-    return (
-        <div className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-end">
-                <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-gray-300 mb-1">Category</label>
-                    <select value={category} onChange={e => setCategory(e.target.value)} className="w-full p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500">
-                        {categories.map(c => <option key={c} value={c}>{c}</option>)}
-                    </select>
-                </div>
-                <button onClick={findTrends} disabled={loading} className="w-full p-3 bg-purple-600 rounded-lg font-bold hover:bg-purple-700 disabled:bg-purple-900">Find Trends</button>
-            </div>
-            {loading && <div className="flex justify-center"><Spinner message="Scanning the globe..." /></div>}
-            {error && <p className="text-red-400 text-center">{error}</p>}
-            {response && (
-                <div className="p-4 bg-gray-800 rounded-lg prose prose-invert max-w-none whitespace-pre-wrap">
-                    {response}
-                </div>
-            )}
-        </div>
-    );
-};
-
-// --- Keywords Research Component ---
-const KeywordsResearch: React.FC = () => {
-    type KeywordResult = { keyword: string; volume: string; difficulty: string; };
-    const [topic, setTopic] = useState('');
-    const [results, setResults] = useState<KeywordResult[]>([]);
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState('');
-
-    const research = async () => {
-        if (!topic) return;
-        setLoading(true);
-        setError('');
-        setResults([]);
-        try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-            const response = await ai.models.generateContent({
-                model: "gemini-2.5-flash",
-                contents: `Act as an SEO expert. For the topic "${topic}", generate a list of 15 related keywords, including long-tail and question-based queries. For each keyword, provide a qualitative search volume estimate (High, Medium, Low) and a qualitative SEO difficulty estimate (High, Medium, Low).`,
-                config: {
-                    responseMimeType: "application/json",
-                    responseSchema: {
-                        type: Type.OBJECT,
-                        properties: {
-                            keywords: {
-                                type: Type.ARRAY,
-                                items: {
-                                    type: Type.OBJECT,
-                                    properties: {
-                                        keyword: { type: Type.STRING },
-                                        volume: { type: Type.STRING },
-                                        difficulty: { type: Type.STRING },
-                                    },
-                                    required: ["keyword", "volume", "difficulty"]
-                                }
-                            }
-                        }
-                    }
-                }
-            });
-            const parsed = JSON.parse(response.text);
-            setResults(parsed.keywords);
-        } catch (err) {
-            console.error(err);
-            setError(`Research failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    return (
-        <div className="space-y-6">
-            <div className="flex gap-4">
-                <input type="text" value={topic} onChange={e => setTopic(e.target.value)} placeholder="Enter a topic, e.g., 'sustainable gardening'" className="flex-grow p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" />
-                <button onClick={research} disabled={loading} className="p-3 bg-purple-600 rounded-lg font-bold hover:bg-purple-700 disabled:bg-purple-900">Research</button>
-            </div>
-            {loading && <div className="flex justify-center"><Spinner message="Finding keywords..." /></div>}
-            {error && <p className="text-red-400 text-center">{error}</p>}
-            {results.length > 0 && (
-                <div className="overflow-x-auto bg-gray-800/50 rounded-lg">
-                    <table className="w-full text-left">
-                        <thead className="bg-gray-700/50"><tr>
-                            <th className="p-3">Keyword</th><th className="p-3">Est. Volume</th><th className="p-3">Est. Difficulty</th>
-                        </tr></thead>
-                        <tbody>
-                            {results.map((res, i) => (
-                                <tr key={i} className="border-b border-gray-700">
-                                    <td className="p-3 font-semibold">{res.keyword}</td><td className="p-3">{res.volume}</td><td className="p-3">{res.difficulty}</td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            )}
-        </div>
-    );
-};
-
-// --- Website Analysis Component ---
-const WebsiteAnalysis: React.FC = () => {
-    const [url, setUrl] = useState('');
-    const [response, setResponse] = useState('');
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState('');
-
-    const analyze = async () => {
-        if (!url) return;
-        setLoading(true);
-        setError('');
-        setResponse('');
-        try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-            const result = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
-                contents: `Analyze the website at ${url}. Provide a comprehensive report covering SEO (keywords, backlink profile ideas), performance (potential speed improvements), and accessibility (common issues to check for). Provide actionable insights. Format the output in markdown.`,
-                config: { tools: [{ googleSearch: {} }] },
-            });
-            setResponse(result.text);
-        } catch (err) {
-            console.error(err);
-            setError(`Analysis failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    return (
-        <div className="space-y-6">
-            <div className="flex gap-4">
-                <input type="url" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://example.com" className="flex-grow p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" />
-                <button onClick={analyze} disabled={loading} className="p-3 bg-purple-600 rounded-lg font-bold hover:bg-purple-700 disabled:bg-purple-900">Analyze</button>
-            </div>
-            {loading && <div className="flex justify-center"><Spinner message="Analyzing website..." /></div>}
-            {error && <p className="text-red-400 text-center">{error}</p>}
-            {response && <div className="p-4 bg-gray-800 rounded-lg prose prose-invert max-w-none whitespace-pre-wrap">{response}</div>}
-        </div>
-    );
-};
-
-// --- Web Scraping Component ---
-const WebScraping: React.FC = () => {
-    const [url, setUrl] = useState('');
-    const [query, setQuery] = useState('');
-    const [response, setResponse] = useState('');
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState('');
-
-    const scrape = async () => {
-        if (!url || !query) return;
-        setLoading(true);
-        setError('');
-        setResponse('');
-        try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-            const result = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
-                contents: `Using your knowledge of the content at the URL ${url}, extract the following information: ${query}. Present the data in a clear, structured format. If the request implies a list, use a numbered or bulleted list.`,
-                config: { tools: [{ googleSearch: {} }] },
-            });
-            setResponse(result.text);
-        } catch (err) {
-            console.error(err);
-            setError(`Scraping failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
-        } finally {
-            setLoading(false);
-        }
-    };
-    
-    return (
-         <div className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <input type="url" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://example.com" className="p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" />
-                <input type="text" value={query} onChange={e => setQuery(e.target.value)} placeholder="What to extract? e.g., 'all h2 headings'" className="p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" />
-            </div>
-            <button onClick={scrape} disabled={loading} className="w-full p-3 bg-purple-600 rounded-lg font-bold hover:bg-purple-700 disabled:bg-purple-900">Scrape</button>
-            {loading && <div className="flex justify-center"><Spinner message="Extracting data..." /></div>}
-            {error && <p className="text-red-400 text-center">{error}</p>}
-            {response && <pre className="p-4 bg-gray-800 rounded-lg whitespace-pre-wrap font-mono text-sm">{response}</pre>}
-        </div>
-    );
-};
-
-
-// --- Email Validation Component ---
-const EmailValidation: React.FC = () => {
-    type ValidationResult = {
-        valid: string[];
-        invalid: string[];
-        risky: string[];
-        duplicates: number;
-        total: number;
-    };
-
-    const [inputText, setInputText] = useState('');
-    const [results, setResults] = useState<ValidationResult | null>(null);
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState('');
-    const [activeTab, setActiveTab] = useState<'valid' | 'invalid' | 'risky'>('valid');
-
-    const handleFileSelect = (file: File) => {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const content = e.target?.result as string;
-            setInputText(content);
-        };
-        reader.onerror = () => {
-            setError('Failed to read the file.');
-        };
-        reader.readAsText(file);
-    };
-
-    const validateEmails = () => {
-        if (!inputText.trim()) {
-            setError('Please provide emails to validate.');
-            return;
-        }
-        setLoading(true);
-        setError('');
-        setResults(null);
-
-        // Simulate processing delay for better UX
-        setTimeout(() => {
-            const emailRegex = new RegExp(
-                /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/
-            );
-            
-            const emails: string[] = inputText.split(/[,\s\n]+/).filter(e => e.trim() !== '');
-            const uniqueEmails: string[] = [...new Set(emails.map(e => e.trim().toLowerCase()))];
-
-            const validation: Omit<ValidationResult, 'duplicates' | 'total'> = {
-                valid: [],
-                invalid: [],
-                risky: [],
+    const handleConvert = () => {
+        if (!files) return;
+        Array.from(files).forEach((f) => {
+            const file = f as File;
+            const img = new Image();
+            img.onload = () => {
+                canvasRef.width = img.width;
+                canvasRef.height = img.height;
+                const ctx = canvasRef.getContext('2d');
+                ctx?.drawImage(img, 0, 0);
+                const dataUrl = canvasRef.toDataURL(format);
+                const link = document.createElement('a');
+                link.download = `converted-${file.name.split('.')[0]}.${format.split('/')[1]}`;
+                link.href = dataUrl;
+                link.click();
             };
-
-            for (const email of uniqueEmails) {
-                if (!emailRegex.test(email)) {
-                    validation.invalid.push(email);
-                } else {
-                    const domain = email.split('@')[1];
-                    const user = email.split('@')[0];
-                    if (disposableDomains.has(domain) || roleBasedEmails.has(user)) {
-                        validation.risky.push(email);
-                    } else {
-                        validation.valid.push(email);
-                    }
-                }
-            }
-
-            setResults({
-                ...validation,
-                total: emails.length,
-                duplicates: emails.length - uniqueEmails.length,
-            });
-            setLoading(false);
-        }, 500);
-    };
-    
-    const copyToClipboard = (data: string[]) => {
-        navigator.clipboard.writeText(data.join('\n'));
-    };
-
-    const downloadAsCsv = (data: string[], filename: string) => {
-        const csvContent = "data:text/csv;charset=utf-8," + "email\n" + data.join("\n");
-        const encodedUri = encodeURI(csvContent);
-        const link = document.createElement("a");
-        link.setAttribute("href", encodedUri);
-        link.setAttribute("download", filename);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-    };
-
-    const renderResultList = (emails: string[], category: string) => (
-        <div className="h-64 overflow-y-auto bg-gray-900/50 p-3 rounded-md space-y-2">
-            <div className="flex justify-end gap-2 mb-2">
-                <button onClick={() => copyToClipboard(emails)} className="px-3 py-1 bg-gray-600 hover:bg-gray-500 rounded text-sm">Copy</button>
-                <button onClick={() => downloadAsCsv(emails, `${category}_emails.csv`)} className="px-3 py-1 bg-blue-600 hover:bg-blue-500 rounded text-sm">Download CSV</button>
-            </div>
-            {emails.length > 0 ? (
-                emails.map((email, index) => (
-                    <p key={index} className="text-sm text-gray-300 font-mono break-all">{email}</p>
-                ))
-            ) : (
-                <p className="text-gray-500 text-center pt-8">No emails in this category.</p>
-            )}
-        </div>
-    );
-
-    return (
-        <div className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-                <textarea
-                    value={inputText}
-                    onChange={(e) => setInputText(e.target.value)}
-                    placeholder="Paste your email list here (one per line, or comma/space separated)"
-                    rows={10}
-                    className="w-full p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-                />
-                <div className="space-y-4">
-                    <FileUploader onFileSelect={handleFileSelect} accept=".txt,.csv" label="Or upload a .txt/.csv file" />
-                    <button onClick={validateEmails} disabled={loading} className="w-full p-3 bg-purple-600 rounded-lg font-bold hover:bg-purple-700 disabled:bg-purple-900 disabled:cursor-not-allowed">
-                        {loading ? 'Validating...' : 'Validate Emails'}
-                    </button>
-                </div>
-            </div>
-            {loading && <div className="flex justify-center"><Spinner message="Analyzing your list..." /></div>}
-            {error && <p className="text-red-400 text-center">{error}</p>}
-            
-            {results && (
-                <div className="animate-fade-in space-y-6">
-                    {/* Summary Cards */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
-                        <div className="bg-gray-800 p-4 rounded-lg"><p className="text-2xl font-bold">{results.total}</p><p className="text-sm text-gray-400">Total Processed</p></div>
-                        <div className="bg-green-800/50 p-4 rounded-lg"><p className="text-2xl font-bold text-green-300">{results.valid.length}</p><p className="text-sm text-gray-400">Valid</p></div>
-                        <div className="bg-red-800/50 p-4 rounded-lg"><p className="text-2xl font-bold text-red-300">{results.invalid.length}</p><p className="text-sm text-gray-400">Invalid Syntax</p></div>
-                        <div className="bg-yellow-800/50 p-4 rounded-lg"><p className="text-2xl font-bold text-yellow-300">{results.risky.length}</p><p className="text-sm text-gray-400">Risky</p></div>
-                    </div>
-                     {results.duplicates > 0 && <p className="text-center text-gray-400">Removed {results.duplicates} duplicate(s).</p>}
-                    {/* Tabbed Results */}
-                    <div>
-                        <div className="border-b border-gray-700">
-                            <nav className="-mb-px flex space-x-6" aria-label="Tabs">
-                                <button onClick={() => setActiveTab('valid')} className={`whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm ${activeTab === 'valid' ? 'border-purple-500 text-purple-400' : 'border-transparent text-gray-400 hover:text-gray-200 hover:border-gray-500'}`}>Valid ({results.valid.length})</button>
-                                <button onClick={() => setActiveTab('invalid')} className={`whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm ${activeTab === 'invalid' ? 'border-purple-500 text-purple-400' : 'border-transparent text-gray-400 hover:text-gray-200 hover:border-gray-500'}`}>Invalid Syntax ({results.invalid.length})</button>
-                                <button onClick={() => setActiveTab('risky')} className={`whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm ${activeTab === 'risky' ? 'border-purple-500 text-purple-400' : 'border-transparent text-gray-400 hover:text-gray-200 hover:border-gray-500'}`}>Risky ({results.risky.length})</button>
-                            </nav>
-                        </div>
-                        <div className="pt-4">
-                            {activeTab === 'valid' && renderResultList(results.valid, 'valid')}
-                            {activeTab === 'invalid' && renderResultList(results.invalid, 'invalid')}
-                            {activeTab === 'risky' && renderResultList(results.risky, 'risky')}
-                        </div>
-                    </div>
-                </div>
-            )}
-        </div>
-    );
-};
-
-// --- Email Extractor Component ---
-const EmailExtractor: React.FC = () => {
-    const [inputText, setInputText] = useState('');
-    const [extractedEmails, setExtractedEmails] = useState<string[]>([]);
-    const [copyButtonText, setCopyButtonText] = useState('Copy All');
-
-    const handleExtract = () => {
-        if (!inputText.trim()) {
-            setExtractedEmails([]);
-            return;
-        }
-        const emailRegex = /([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/gi;
-        const foundEmails = inputText.match(emailRegex) || [];
-        const uniqueEmails = [...new Set(foundEmails.map(email => email.toLowerCase()))];
-        setExtractedEmails(uniqueEmails.sort());
-    };
-
-    const copyResults = () => {
-        if (extractedEmails.length > 0) {
-            navigator.clipboard.writeText(extractedEmails.join('\n'));
-            setCopyButtonText('Copied!');
-            setTimeout(() => setCopyButtonText('Copy All'), 2000);
-        }
-    };
-
-    const downloadResults = () => {
-        if (extractedEmails.length > 0) {
-            const textContent = "data:text/plain;charset=utf-8," + encodeURIComponent(extractedEmails.join("\n"));
-            const link = document.createElement("a");
-            link.setAttribute("href", textContent);
-            link.setAttribute("download", "extracted_emails.txt");
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-        }
-    };
-
-    return (
-        <div className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="space-y-4">
-                    <textarea
-                        value={inputText}
-                        onChange={(e) => setInputText(e.target.value)}
-                        placeholder="Paste text containing email addresses here..."
-                        rows={16}
-                        className="w-full p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    />
-                    <button onClick={handleExtract} className="w-full p-3 bg-purple-600 rounded-lg font-bold hover:bg-purple-700 disabled:bg-purple-900 disabled:cursor-not-allowed">
-                        Extract Emails
-                    </button>
-                </div>
-
-                <div className="space-y-4">
-                    <div className="flex justify-between items-center bg-gray-800/50 p-3 rounded-lg">
-                        <h3 className="text-lg font-bold">
-                            Found: <span className="text-purple-400">{extractedEmails.length}</span> unique email(s)
-                        </h3>
-                        {extractedEmails.length > 0 && (
-                            <div className="flex gap-2">
-                                <button onClick={copyResults} className="px-3 py-1.5 bg-gray-600 hover:bg-gray-500 rounded text-sm transition-colors">{copyButtonText}</button>
-                                <button onClick={downloadResults} className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded text-sm">Download .txt</button>
-                            </div>
-                        )}
-                    </div>
-                    <div className="h-[20.5rem] overflow-y-auto bg-gray-700 p-3 rounded-lg space-y-2">
-                        {extractedEmails.length > 0 ? (
-                            extractedEmails.map((email, index) => (
-                                <p key={index} className="font-mono text-sm text-gray-300 break-all">{email}</p>
-                            ))
-                        ) : (
-                            <div className="flex items-center justify-center h-full text-gray-500">
-                                <p>Results will appear here...</p>
-                            </div>
-                        )}
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-};
-
-
-// --- Email Marketing Component ---
-const AiContentGenerator: React.FC<{ onGenerate: (content: string) => void }> = ({ onGenerate }) => {
-    const [prompt, setPrompt] = useState('');
-    const [isLoading, setIsLoading] = useState(false);
-    const [result, setResult] = useState('');
-    
-    const handleGenerateContent = async () => {
-        if (!prompt) return;
-        setIsLoading(true);
-        setResult('');
-        try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-            const response = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
-                contents: `Generate a compelling email marketing copy for the following topic: ${prompt}. The output should be well-formatted text.`,
-            });
-            setResult(response.text);
-        } catch (error) {
-            console.error("AI content generation failed:", error);
-            setResult("Sorry, I couldn't generate content. Please try again.");
-        } finally {
-            setIsLoading(false);
-        }
-    };
-
-    return (
-        <div className="space-y-4 w-full">
-            <h3 className="text-xl font-bold text-purple-300">Generate Email Content</h3>
-            <textarea
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                placeholder="e.g., A special 20% off summer sale on all electronics"
-                className="w-full h-24 p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-                disabled={isLoading}
-            />
-            <button
-                onClick={handleGenerateContent}
-                disabled={isLoading || !prompt}
-                className="w-full p-3 bg-purple-600 rounded-lg font-bold hover:bg-purple-700 disabled:bg-purple-900"
-            >
-                {isLoading ? <Spinner /> : 'Generate Content'}
-            </button>
-            {result && (
-                <div className="mt-4 p-4 bg-gray-900 rounded-lg max-h-64 overflow-y-auto">
-                    <p className="text-gray-300 whitespace-pre-wrap">{result}</p>
-                    <button
-                        onClick={() => onGenerate(result)}
-                        className="mt-4 w-full p-2 bg-green-600 rounded-lg font-bold hover:bg-green-700"
-                    >
-                        Use This Content
-                    </button>
-                </div>
-            )}
-        </div>
-    );
-};
-
-const EmailCampaignEditor: React.FC<{
-    campaign: Campaign | undefined;
-    lists: ContactList[];
-    onSave: (campaign: Campaign) => void;
-    onCancel: () => void;
-}> = ({ campaign: initialCampaign, lists, onSave, onCancel }) => {
-    const [campaign, setCampaign] = useState<Campaign | null>(() => {
-        if (initialCampaign) return initialCampaign;
-        const newCampaign: Campaign = {
-            id: `c_${Date.now()}`,
-            name: '',
-            subject: '',
-            fromName: 'Edukester',
-            fromEmail: 'noreply@edukester.com',
-            content: '',
-            audienceListIds: [],
-            status: 'Draft',
-            stats: { recipients: 0, openRate: 0, clickRate: 0 },
-            createdAt: new Date().toISOString(),
-        };
-        return newCampaign;
-    });
-    const [isAiOpen, setIsAiOpen] = useState(false);
-
-    useEffect(() => {
-        if (initialCampaign) {
-            setCampaign(initialCampaign);
-        }
-    }, [initialCampaign]);
-
-    const handleSave = () => {
-        if (campaign) {
-            onSave({ ...campaign, status: 'Draft' });
-        }
-    };
-
-    const handleSend = () => {
-        if (campaign) {
-            const campaignToSend = { ...campaign, status: 'Sending' as const };
-            onSave(campaignToSend);
-
-            // Simulate sending delay
-            setTimeout(() => {
-                onSave({ ...campaignToSend, status: 'Sent', sentAt: new Date().toISOString() });
-            }, 2000);
-        }
-    };
-
-    if (!campaign) {
-        return <div className="text-center p-8"><Spinner message="Loading Campaign..." /></div>;
-    }
-
-    return (
-        <div className="bg-gray-900 p-8 rounded-lg shadow-2xl w-full max-w-4xl space-y-6 animate-fade-in">
-            <h2 className="text-3xl font-bold text-white">{initialCampaign ? 'Edit Campaign' : 'Create Campaign'}</h2>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <input type="text" placeholder="Campaign Name" value={campaign.name} onChange={e => setCampaign({ ...campaign, name: e.target.value })} className="p-3 bg-gray-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" />
-                <input type="text" placeholder="Subject Line" value={campaign.subject} onChange={e => setCampaign({ ...campaign, subject: e.target.value })} className="p-3 bg-gray-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" />
-                <input type="text" placeholder="From Name" value={campaign.fromName} onChange={e => setCampaign({ ...campaign, fromName: e.target.value })} className="p-3 bg-gray-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" />
-                <input type="email" placeholder="From Email" value={campaign.fromEmail} onChange={e => setCampaign({ ...campaign, fromEmail: e.target.value })} className="p-3 bg-gray-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" />
-            </div>
-
-            <div>
-                <label className="block text-lg font-semibold text-gray-300 mb-2">Email Content</label>
-                <div className="relative">
-                    <textarea placeholder="Write your email here, or use AI to generate it..." value={campaign.content} onChange={e => setCampaign({ ...campaign, content: e.target.value })} rows={12} className="w-full p-3 bg-gray-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"></textarea>
-                    <button onClick={() => setIsAiOpen(true)} className="absolute top-3 right-3 px-3 py-1.5 text-sm bg-purple-600 hover:bg-purple-700 rounded-md font-semibold">
-                        Generate with AI
-                    </button>
-                </div>
-            </div>
-
-            <div>
-                <label className="block text-lg font-semibold text-gray-300 mb-2">Audience</label>
-                <select multiple value={campaign.audienceListIds} onChange={e => setCampaign({ ...campaign, audienceListIds: Array.from(e.target.selectedOptions, (option: HTMLOptionElement) => option.value) })} className="w-full p-3 bg-gray-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 h-32">
-                    {lists.map(list => (
-                        <option key={list.id} value={list.id}>{list.name} ({list.contacts.length})</option>
-                    ))}
-                </select>
-                <p className="text-sm text-gray-500 mt-1">Hold Ctrl/Cmd to select multiple lists.</p>
-            </div>
-
-            <div className="flex justify-end gap-4 pt-4">
-                <button onClick={onCancel} className="px-6 py-2 bg-gray-600 hover:bg-gray-700 rounded-lg font-semibold">Cancel</button>
-                <button onClick={handleSave} className="px-6 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold">Save as Draft</button>
-                <button onClick={handleSend} className="px-6 py-2 bg-green-600 hover:bg-green-700 rounded-lg font-semibold">Send Campaign</button>
-            </div>
-            
-            {isAiOpen && (
-                <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 animate-fade-in">
-                    <div className="bg-gray-800 p-6 rounded-lg shadow-xl w-full max-w-2xl relative">
-                         <button onClick={() => setIsAiOpen(false)} className="absolute top-3 right-3 text-gray-400 hover:text-white">
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                        </button>
-                        <AiContentGenerator onGenerate={(content) => {
-                            setCampaign(c => c ? { ...c, content } : null);
-                            setIsAiOpen(false);
-                        }} />
-                    </div>
-                </div>
-            )}
-        </div>
-    );
-};
-
-
-const EmailMarketing: React.FC = () => {
-    type View = 'dashboard' | 'listDetail' | 'campaignEditor';
-    type Modal = 'createList' | 'addContacts' | null;
-
-    const [view, setView] = useState<View>('dashboard');
-    const [activeTab, setActiveTab] = useState<'campaigns' | 'audience'>('campaigns');
-    const [lists, setLists] = useState<ContactList[]>([]);
-    const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-    
-    const [selectedListId, setSelectedListId] = useState<string | null>(null);
-    const [editingCampaignId, setEditingCampaignId] = useState<string | null>(null);
-    
-    const [modal, setModal] = useState<Modal>(null);
-    const [newListName, setNewListName] = useState('');
-    const [contactsToAdd, setContactsToAdd] = useState('');
-
-    useEffect(() => {
-        setLists([
-            { id: 'l1', name: 'Newsletter Subscribers', contacts: [{id: 'c1', email: 'subscriber1@example.com', name: 'Alex', createdAt: new Date().toISOString()}], createdAt: new Date().toISOString() },
-            { id: 'l2', name: 'Past Customers', contacts: [], createdAt: new Date().toISOString() },
-        ]);
-        setCampaigns([
-            { id: 'camp1', name: 'Q2 Newsletter', subject: 'Our Latest Updates!', fromName: 'Edukester', fromEmail: 'news@edukester.com', content: 'Hello world...', audienceListIds: ['l1'], status: 'Sent', stats: { recipients: 1500, openRate: 25.5, clickRate: 4.1 }, createdAt: '2023-06-15T10:00:00Z', sentAt: '2023-06-15T14:00:00Z' },
-            { id: 'camp2', name: 'July Promo', subject: 'Summer Sale is Here!', fromName: 'Edukester', fromEmail: 'deals@edukester.com', content: 'Get 20% off!', audienceListIds: ['l2'], status: 'Draft', stats: { recipients: 0, openRate: 0, clickRate: 0 }, createdAt: '2023-07-01T11:00:00Z' },
-        ]);
-    }, []);
-    
-    const handleCreateCampaign = () => {
-        setEditingCampaignId(null);
-        setView('campaignEditor');
-    };
-    
-    const handleEditCampaign = (id: string) => {
-        setEditingCampaignId(id);
-        setView('campaignEditor');
-    };
-    
-    const handleDeleteCampaign = (id: string) => {
-        if (window.confirm('Are you sure you want to delete this campaign?')) {
-            setCampaigns(campaigns.filter(c => c.id !== id));
-        }
-    };
-
-    const handleSaveCampaign = (savedCampaign: Campaign) => {
-        setCampaigns(prev => {
-            const index = prev.findIndex(c => c.id === savedCampaign.id);
-            if (index > -1) {
-                const newCampaigns = [...prev];
-                newCampaigns[index] = savedCampaign;
-                return newCampaigns;
-            }
-            return [...prev, savedCampaign];
+            img.src = URL.createObjectURL(file);
         });
-        setEditingCampaignId(null);
-        setView('dashboard');
     };
 
-    const handleCreateList = () => {
-        if (!newListName.trim()) return;
-        const newList: ContactList = {
-            id: `l_${Date.now()}`,
-            name: newListName,
-            contacts: [],
-            createdAt: new Date().toISOString(),
-        };
-        setLists(prev => [...prev, newList]);
-        setNewListName('');
-        setModal(null);
-    };
-    
-    const handleDeleteList = (listId: string) => {
-        if (window.confirm('Are you sure? This will remove the list and unsubscribe its contacts from any campaigns.')) {
-            setLists(lists.filter(l => l.id !== listId));
-            setCampaigns(campaigns.map(c => ({
-                ...c,
-                audienceListIds: c.audienceListIds.filter(id => id !== listId)
-            })));
-        }
-    };
-    
-    const handleAddContacts = () => {
-        if (!selectedListId || !contactsToAdd.trim()) return;
-        const emails = contactsToAdd.split(/[,\s\n]+/).filter(e => e.trim() !== '');
-        const newContacts: Contact[] = emails.map(email => ({
-            id: `c_${Date.now()}_${email}`,
-            email: email.trim(),
-            createdAt: new Date().toISOString()
-        }));
-
-        setLists(lists.map(list => {
-            if (list.id === selectedListId) {
-                const existingEmails = new Set(list.contacts.map(c => c.email));
-                const uniqueNewContacts = newContacts.filter(c => !existingEmails.has(c.email));
-                return { ...list, contacts: [...list.contacts, ...uniqueNewContacts] };
-            }
-            return list;
-        }));
-        setContactsToAdd('');
-        setModal(null);
-    };
-    
-    const handleAddContactsFromFile = (file: File) => {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            setContactsToAdd(e.target?.result as string);
-        };
-        reader.readAsText(file);
-    };
-
-    const handleDeleteContact = (listId: string, contactId: string) => {
-        setLists(lists.map(list => {
-            if (list.id === listId) {
-                return { ...list, contacts: list.contacts.filter(c => c.id !== contactId) };
-            }
-            return list;
-        }));
-    };
-    
-    const renderStatusBadge = (status: Campaign['status']) => {
-        const styles = {
-            Draft: 'bg-gray-500 text-gray-100',
-            Sending: 'bg-blue-500 text-white animate-pulse',
-            Sent: 'bg-green-500 text-white',
-        };
-        return <span className={`px-2 py-1 text-xs font-semibold rounded-full ${styles[status]}`}>{status}</span>;
-    };
-    
-    if (view === 'campaignEditor') {
-        const campaign = campaigns.find(c => c.id === editingCampaignId);
-        return <EmailCampaignEditor campaign={campaign} lists={lists} onSave={handleSaveCampaign} onCancel={() => setView('dashboard')} />;
-    }
-
-    if (view === 'listDetail') {
-        const list = lists.find(l => l.id === selectedListId);
-        if (!list) { setView('dashboard'); return null; }
-        return (
-            <div className="space-y-6 animate-fade-in">
-                <button onClick={() => setView('dashboard')} className="text-purple-400 hover:text-purple-300">&larr; Back to Dashboard</button>
-                <div className="flex justify-between items-center">
-                    <h2 className="text-3xl font-bold">{list.name} <span className="text-lg font-normal text-gray-400">({list.contacts.length} Contacts)</span></h2>
-                    <button onClick={() => setModal('addContacts')} className="px-5 py-2.5 bg-purple-600 hover:bg-purple-700 rounded-lg font-bold">Add Contacts</button>
-                </div>
-                <div className="bg-gray-800/50 rounded-lg shadow-lg overflow-hidden">
-                    <table className="w-full text-left">
-                         <thead className="bg-gray-700/50"><tr>
-                            <th className="p-4">Email</th><th className="p-4">Name</th><th className="p-4">Date Added</th><th className="p-4">Actions</th>
-                        </tr></thead>
-                        <tbody>
-                            {list.contacts.map(c => (
-                                <tr key={c.id} className="border-b border-gray-700 hover:bg-gray-800">
-                                    <td className="p-4 font-mono text-sm">{c.email}</td>
-                                    <td className="p-4">{c.name || '--'}</td>
-                                    <td className="p-4">{new Date(c.createdAt).toLocaleDateString()}</td>
-                                    <td className="p-4"><button onClick={() => handleDeleteContact(list.id, c.id)} className="px-3 py-1 bg-red-800 hover:bg-red-700 rounded text-sm">Delete</button></td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        );
-    }
-    
     return (
-        <div className="space-y-8 animate-fade-in">
-            <div className="border-b border-gray-700">
-                <nav className="-mb-px flex space-x-8" aria-label="Tabs">
-                    <button onClick={() => setActiveTab('campaigns')} className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-lg ${activeTab === 'campaigns' ? 'border-purple-500 text-purple-400' : 'border-transparent text-gray-400 hover:text-gray-200 hover:border-gray-500'}`}>Campaigns</button>
-                    <button onClick={() => setActiveTab('audience')} className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-lg ${activeTab === 'audience' ? 'border-purple-500 text-purple-400' : 'border-transparent text-gray-400 hover:text-gray-200 hover:border-gray-500'}`}>Audience</button>
-                </nav>
-            </div>
-
-            {activeTab === 'campaigns' && (
-            <div>
-                 <div className="flex justify-between items-center mb-6">
-                    <h2 className="text-3xl font-bold">Email Campaigns</h2>
-                    <button onClick={handleCreateCampaign} className="px-5 py-2.5 bg-purple-600 hover:bg-purple-700 rounded-lg font-bold">Create Campaign</button>
-                </div>
-                <div className="bg-gray-800/50 rounded-lg shadow-lg overflow-hidden">
-                    <table className="w-full text-left">
-                        <thead className="bg-gray-700/50"><tr>
-                            <th className="p-4">Campaign</th><th className="p-4">Status</th><th className="p-4">Recipients</th><th className="p-4">Open Rate</th><th className="p-4">Click Rate</th><th className="p-4">Actions</th>
-                        </tr></thead>
-                        <tbody>
-                            {campaigns.map(c => (
-                                <tr key={c.id} className="border-b border-gray-700 hover:bg-gray-800">
-                                    <td className="p-4 font-semibold">{c.name}<br/><span className="text-sm text-gray-400 font-normal">{c.subject}</span></td>
-                                    <td className="p-4">{renderStatusBadge(c.status)}</td>
-                                    <td className="p-4">{c.stats.recipients.toLocaleString()}</td><td className="p-4">{c.stats.openRate.toFixed(1)}%</td><td className="p-4">{c.stats.clickRate.toFixed(1)}%</td>
-                                    <td className="p-4 space-x-2"><button onClick={() => handleEditCampaign(c.id)} className="px-3 py-1 bg-gray-600 hover:bg-gray-500 rounded text-sm">Edit</button><button onClick={() => handleDeleteCampaign(c.id)} className="px-3 py-1 bg-red-800 hover:bg-red-700 rounded text-sm">Delete</button></td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-            )}
-            
-            {activeTab === 'audience' && (
-            <div>
-                <div className="flex justify-between items-center mb-6">
-                    <h2 className="text-3xl font-bold">Contact Lists</h2>
-                    <button onClick={() => setModal('createList')} className="px-5 py-2.5 bg-purple-600 hover:bg-purple-700 rounded-lg font-bold">Create List</button>
-                </div>
-                <div className="bg-gray-800/50 rounded-lg shadow-lg overflow-hidden">
-                    <table className="w-full text-left">
-                         <thead className="bg-gray-700/50"><tr>
-                            <th className="p-4">List Name</th><th className="p-4">Contacts</th><th className="p-4">Date Created</th><th className="p-4">Actions</th>
-                        </tr></thead>
-                        <tbody>
-                            {lists.map(l => (
-                                <tr key={l.id} className="border-b border-gray-700 hover:bg-gray-800">
-                                    <td className="p-4 font-semibold">{l.name}</td>
-                                    <td className="p-4">{l.contacts.length}</td>
-                                    <td className="p-4">{new Date(l.createdAt).toLocaleDateString()}</td>
-                                    <td className="p-4 space-x-2">
-                                        <button onClick={() => { setSelectedListId(l.id); setView('listDetail'); }} className="px-3 py-1 bg-gray-600 hover:bg-gray-500 rounded text-sm">Manage</button>
-                                        <button onClick={() => handleDeleteList(l.id)} className="px-3 py-1 bg-red-800 hover:bg-red-700 rounded text-sm">Delete</button>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-            )}
-            
-            {/* Modals */}
-            {modal === 'createList' && (
-            <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-                <div className="bg-gray-800 p-6 rounded-lg shadow-xl w-full max-w-md space-y-4">
-                    <h3 className="text-xl font-bold">Create New List</h3>
-                    <input type="text" value={newListName} onChange={e => setNewListName(e.target.value)} placeholder="List Name" className="w-full p-3 bg-gray-700 rounded-lg"/>
-                    <div className="flex justify-end gap-3"><button onClick={() => setModal(null)} className="px-4 py-2 bg-gray-600 rounded">Cancel</button><button onClick={handleCreateList} className="px-4 py-2 bg-purple-600 rounded">Create</button></div>
-                </div>
-            </div>
-            )}
-            {modal === 'addContacts' && (
-             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-                <div className="bg-gray-800 p-6 rounded-lg shadow-xl w-full max-w-lg space-y-4">
-                    <h3 className="text-xl font-bold">Add Contacts to "{lists.find(l=>l.id===selectedListId)?.name}"</h3>
-                    <textarea value={contactsToAdd} onChange={e => setContactsToAdd(e.target.value)} placeholder="Paste emails here, separated by commas, spaces, or new lines." rows={8} className="w-full p-3 bg-gray-700 rounded-lg"/>
-                    <FileUploader onFileSelect={handleAddContactsFromFile} accept=".txt,.csv" label="Or upload a file"/>
-                    <div className="flex justify-end gap-3"><button onClick={() => setModal(null)} className="px-4 py-2 bg-gray-600 rounded">Cancel</button><button onClick={handleAddContacts} className="px-4 py-2 bg-purple-600 rounded">Add Contacts</button></div>
-                </div>
-            </div>
-            )}
+        <div className="max-w-4xl mx-auto space-y-6">
+            <Card className="p-6 space-y-4">
+                <Label>Select Images</Label>
+                <input type="file" multiple accept="image/*" onChange={e => setFiles(e.target.files)} className="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-purple-600 file:text-white hover:file:bg-purple-700"/>
+                <Label>Output Format</Label>
+                <select value={format} onChange={e => setFormat(e.target.value)} className="w-full bg-gray-900 border border-gray-700 rounded-lg p-3">
+                    <option value="image/png">PNG</option>
+                    <option value="image/jpeg">JPEG</option>
+                    <option value="image/webp">WEBP</option>
+                    <option value="image/bmp">BMP</option>
+                </select>
+                <Button onClick={handleConvert} disabled={!files} className="w-full">Convert & Download</Button>
+            </Card>
         </div>
     );
 };
 
-// --- Tool Renderer ---
+// --- Main App Component ---
+export default function App() {
+  const [activeToolId, setActiveToolId] = useState<Tool>(Tool.VideoEditor);
+  const activeTool = TOOLS.find(t => t.id === activeToolId);
 
-const toolComponentMap: Record<Tool, React.FC> = {
-    [Tool.Chatbot]: Chatbot,
-    [Tool.LiveConversation]: LiveConversation,
-    [Tool.ImageGeneration]: ImageGeneration,
-    [Tool.ImageEditing]: ImageEditing,
-    [Tool.NanoBananaStudio]: NanoBananaStudio,
-    [Tool.ImageBackgroundRemoval]: ImageBackgroundRemover,
-    [Tool.ImageAnimation]: ImageAnimation,
-    [Tool.ImageUnderstanding]: ImageUnderstanding,
-    [Tool.YouTubeThumbnail]: YouTubeThumbnail,
-    [Tool.ImageConverter]: ImageConverter,
-    [Tool.VideoGeneration]: VideoGeneration,
-    [Tool.VideoUnderstanding]: VideoUnderstanding,
-    [Tool.VideoTranscription]: VideoTranscription,
-    [Tool.GroundedSearch]: GroundedSearch,
-    [Tool.ThinkingMode]: ThinkingMode,
-    [Tool.AudioTranscription]: AudioTranscription,
-    [Tool.TextToSpeech]: TextToSpeech,
-    [Tool.LowLatency]: LowLatency,
-    [Tool.AddressGeneration]: AddressGeneration,
-    [Tool.GlobalTrendingTopics]: GlobalTrendingTopics,
-    [Tool.KeywordsResearch]: KeywordsResearch,
-    [Tool.WebsiteAnalysis]: WebsiteAnalysis,
-    [Tool.WebScraping]: WebScraping,
-    [Tool.EmailMarketing]: EmailMarketing,
-    [Tool.EmailValidation]: EmailValidation,
-    [Tool.EmailExtractor]: EmailExtractor,
-};
-
-const App: React.FC = () => {
-  const [activeTool, setActiveTool] = useState<Tool>(Tool.Chatbot);
-
-  const ActiveToolComponent = toolComponentMap[activeTool];
-  const toolInfo = TOOLS.find(t => t.id === activeTool);
+  const renderTool = () => {
+    switch (activeToolId) {
+      case Tool.Chatbot: return <ChatInterface />;
+      case Tool.ImageGeneration: return <ImageGeneration />;
+      case Tool.YouTubeThumbnail: return <YouTubeThumbnailTool />;
+      case Tool.Wallpaper4K: return <Wallpaper4KTool />;
+      case Tool.FitCheck: return <FitCheckTool />;
+      case Tool.VideoEditor: return <VideoEditorTool />;
+      case Tool.ImageEditing: return <ImageEditor mode="edit" />;
+      case Tool.NanoBananaStudio: return <ImageEditor mode="studio" />;
+      case Tool.ImageBackgroundRemoval: return <ImageEditor mode="remove-bg" />;
+      case Tool.ImageAnimation: return <VideoStudio mode="image-to-video" />;
+      case Tool.VideoGeneration: return <VideoStudio mode="text-to-video" />;
+      case Tool.ImageUnderstanding: return <MediaAnalyzer mode="image" />;
+      case Tool.VideoUnderstanding: return <MediaAnalyzer mode="video" />;
+      case Tool.VideoTranscription: return <MediaAnalyzer mode="video" transcription={true} />;
+      case Tool.AudioTranscription: return <MediaAnalyzer mode="audio" transcription={true} />;
+      case Tool.GroundedSearch: return <GroundedSearchTool type="search" />;
+      case Tool.SearchDataExplorer: return <SearchDataExplorerTool />;
+      case Tool.GlobalTrendingTopics: return <GroundedSearchTool type="trends" />;
+      case Tool.KeywordsResearch: return <GroundedSearchTool type="keywords" />;
+      case Tool.WebsiteAnalysis: return <GroundedSearchTool type="web-analysis" />;
+      case Tool.WebScraping: return <GroundedSearchTool type="scraping" />;
+      case Tool.TextToSpeech: return <TextToSpeech />;
+      case Tool.LiveConversation: return <LiveConversationTool />;
+      case Tool.ImageConverter: return <ImageConverter />;
+      case Tool.BlogPostGenerator: return <BlogPostGeneratorTool />;
+      case Tool.BlogTitleGenerator: return <BlogTitleGeneratorTool />;
+      case Tool.EmailValidation: return (
+        <div className="max-w-4xl mx-auto"><Card className="p-6"><Label>Email Validation</Label><p className="text-gray-400">Validate lists against disposable domains.</p><TextArea placeholder="Paste emails here..." className="mt-4"/></Card></div>
+      );
+      case Tool.EmailExtractor: return (
+        <div className="max-w-4xl mx-auto"><Card className="p-6"><Label>Email Extractor</Label><p className="text-gray-400">Extract emails from text.</p><TextArea placeholder="Paste text here..." className="mt-4"/></Card></div>
+      );
+      default: return <GenericTextTool toolId={activeToolId} />;
+    }
+  };
 
   return (
-    <div className="flex h-screen font-sans">
-      {/* Sidebar */}
-      <aside className="w-72 bg-gray-800 flex flex-col flex-shrink-0">
-        <div className="h-16 flex items-center justify-center border-b border-gray-700 flex-shrink-0">
-          <h1 className="text-2xl font-bold tracking-wider">Edukester AI</h1>
+    <div className="flex h-screen bg-black text-gray-100 font-sans selection:bg-purple-500/30">
+      <aside className="w-72 bg-gray-900/50 border-r border-gray-800 flex flex-col backdrop-blur-sm z-20">
+        <div className="p-6 border-b border-gray-800">
+          <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 via-purple-500 to-pink-500 bg-clip-text text-transparent">Edukester</h1>
         </div>
-        <nav className="flex-1 overflow-y-auto">
-          <ul>
-            {TOOLS.map((tool) => (
-              <li key={tool.id}>
-                <a
-                  href="#"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    setActiveTool(tool.id);
-                  }}
-                  className={`flex items-center px-4 py-3 group transition-colors ${
-                    activeTool === tool.id
-                      ? 'bg-purple-800/50 text-white'
-                      : 'text-gray-400 hover:bg-gray-700 hover:text-white'
-                  }`}
-                >
-                  {tool.icon}
-                  <span className="font-medium">{tool.name}</span>
-                </a>
-              </li>
-            ))}
-          </ul>
-        </nav>
+        <div className="flex-1 overflow-y-auto p-3 space-y-1 scrollbar-thin scrollbar-thumb-gray-800">
+          {TOOLS.map((tool) => (
+            <button
+              key={tool.id}
+              onClick={() => setActiveToolId(tool.id)}
+              className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all duration-200 group text-left ${activeToolId === tool.id ? 'bg-purple-900/20 text-white shadow-lg border border-purple-500/20' : 'text-gray-400 hover:bg-gray-800'}`}
+            >
+              <div className={`${activeToolId === tool.id ? 'text-purple-400' : 'text-gray-500 group-hover:text-gray-300'}`}>{tool.icon}</div>
+              <div className="font-medium text-sm">{tool.name}</div>
+            </button>
+          ))}
+        </div>
       </aside>
 
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col bg-gray-900 overflow-hidden">
-        <header className="h-16 bg-gray-800/50 border-b border-gray-700 flex items-center px-8 flex-shrink-0">
-            {toolInfo && (
-                <div>
-                    <h2 className="text-xl font-bold">{toolInfo.name}</h2>
-                    <p className="text-sm text-gray-400">{toolInfo.description}</p>
-                </div>
-            )}
+      <main className="flex-1 flex flex-col h-full overflow-hidden bg-gradient-to-br from-gray-950 to-black relative">
+        <header className="border-b border-gray-800 bg-gray-900/60 backdrop-blur-xl px-8 py-6 z-10 sticky top-0">
+          <div className="max-w-6xl mx-auto w-full flex items-start gap-5">
+             <div className="p-3 bg-gray-800 rounded-xl border border-gray-700 text-purple-400 shadow-xl mt-1">{activeTool?.icon}</div>
+             <div className="flex-1">
+                <h2 className="text-2xl font-bold text-white tracking-tight">{activeTool?.name}</h2>
+                <p className="text-gray-400 mt-2 text-sm leading-relaxed max-w-2xl">{activeTool?.description}</p>
+             </div>
+          </div>
         </header>
-        <div className="flex-1 p-8 overflow-y-auto">
-          {ActiveToolComponent ? <ActiveToolComponent /> : <div>Select a tool</div>}
+        <div className="flex-1 overflow-y-auto p-8 scrollbar-thin scrollbar-thumb-gray-800">
+           <div className="max-w-7xl mx-auto w-full">{renderTool()}</div>
         </div>
       </main>
     </div>
   );
-};
-
-export default App;
+}

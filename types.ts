@@ -1,3 +1,4 @@
+
 export enum Tool {
   Chatbot = 'Chatbot',
   ImageGeneration = 'ImageGeneration',
@@ -11,6 +12,7 @@ export enum Tool {
   VideoTranscription = 'VideoTranscription',
   LiveConversation = 'LiveConversation',
   GroundedSearch = 'GroundedSearch',
+  SearchDataExplorer = 'SearchDataExplorer',
   ThinkingMode = 'ThinkingMode',
   AudioTranscription = 'AudioTranscription',
   TextToSpeech = 'TextToSpeech',
@@ -25,6 +27,11 @@ export enum Tool {
   EmailMarketing = 'EmailMarketing',
   EmailValidation = 'EmailValidation',
   EmailExtractor = 'EmailExtractor',
+  Wallpaper4K = 'Wallpaper4K',
+  FitCheck = 'FitCheck',
+  VideoEditor = 'VideoEditor',
+  BlogPostGenerator = 'BlogPostGenerator',
+  BlogTitleGenerator = 'BlogTitleGenerator',
 }
 
 export interface ChatMessage {
@@ -34,6 +41,7 @@ export interface ChatMessage {
 
 export type AspectRatio = "1:1" | "16:9" | "9:16" | "4:3" | "3:4";
 export type VideoAspectRatio = "16:9" | "9:16";
+export type VideoResolution = "720p" | "1080p";
 
 // --- Email Marketing Tool Types ---
 export interface Contact {
